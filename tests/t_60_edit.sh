@@ -44,6 +44,14 @@ picker_value; is "$RET" "01;31" "blink can be switched off"
 picker_load "31"; PK_ATTRS+="5 "
 picker_value; is "$RET" "05;31" "...and on"
 
+swatch 34 1; has "$RET" "$PK_MARK" "the selected swatch carries the mark"
+swatch 34 0; hasnt "$RET" "$PK_MARK" "...and the others do not"
+# The inner script is meant for the child shell, so it must not expand here.
+# shellcheck disable=SC2016
+is "$(LC_ALL=C LANG=C "$BASH" -c 'source "$1"; printf %s "$PK_MARK"' _ "$SCRIPT")" "<>" "the mark falls back to ASCII without a UTF-8 locale"
+# shellcheck disable=SC2016
+is "$(LC_ALL=C.UTF-8 "$BASH" -c 'source "$1"; printf %s "$PK_MARK"' _ "$SCRIPT")" "▐▌" "the mark is a solid square in a UTF-8 locale"
+
 group "edit: in a terminal"
 run edit "$FIX/pairs.dircolors" </dev/null
 is "$RC" 2 "refuses to start without a terminal"

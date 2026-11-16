@@ -2725,6 +2725,14 @@ describe_colour() {
   esac
 }
 
+# The mark inside the selected swatch: two half blocks that form a solid
+# square. Without a UTF-8 locale the terminal could not show them, so plain
+# ASCII is used there.
+PK_MARK="<>"
+case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
+  *[Uu][Tt][Ff]8*|*[Uu][Tt][Ff]-8*) PK_MARK="▐▌" ;;
+esac
+
 # swatch VALUE SELECTED -> RET: a two-character cell showing the colour.
 swatch() {
   local v=$1 bg n light=0 text="  "
@@ -2747,7 +2755,7 @@ swatch() {
   else
     (( n >= 244 )) && light=1
   fi
-  (( $2 )) && text="<>"
+  (( $2 )) && text=$PK_MARK
   if (( light )); then RET="${ESC}[${bg};30m${text}${ESC}[0m"; else RET="${ESC}[${bg};97m${text}${ESC}[0m"; fi
 }
 
