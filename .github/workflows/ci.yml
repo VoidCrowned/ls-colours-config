@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version
+      - run: shellcheck ls_colours_config tests/run.sh
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash --version | head -n 1 && ls --version | head -n 1
+      - run: bash tests/run.sh --json
+
+  tests-bash-4-0:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The official bash image is Alpine with BusyBox, so GNU coreutils are added.
+      - run: >
+          docker run --rm -v "$PWD:/repo" -w /repo bash:4.0 sh -c
+          'apk add --no-cache coreutils >/dev/null && bash --version | head -n 1 && bash tests/run.sh --json'

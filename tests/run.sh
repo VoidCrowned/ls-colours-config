@@ -8,6 +8,10 @@
 # The tests run under the bash that runs this file, so "bash-4.0 tests/run.sh"
 # tests against bash 4.0.
 
+# The helpers and variables defined here are used by the sourced tests/t_*.sh
+# files, which shellcheck cannot see from this file.
+# shellcheck disable=SC2034,SC2317,SC2329
+
 cd "$(dirname "$0")/.." || exit 1
 ROOT=$PWD
 SCRIPT="$ROOT/ls_colours_config"

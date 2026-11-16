@@ -5,7 +5,7 @@
 # Needs bash 4.0 or newer and GNU coreutils (ls, dircolors). Nothing else.
 # Licence: WTFPL, see LICENSE.
 
-if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
   echo "ls_colours_config needs bash 4.0 or newer (this is ${BASH_VERSION:-not bash})." >&2
   echo "On macOS: brew install bash coreutils" >&2
   exit 1
@@ -64,7 +64,6 @@ declare -A LPAT=()        # lower-cased pattern -> " *.deb *.DEB" spellings in u
 declare -A TYPE_LINES=()  # ls type code (di, ln, ...) -> line numbers
 declare -a PAT_ORDER=()   # normalised patterns in order of first appearance
 LAST_COLOUR_LINE=0        # last line that sets a colour
-FIRST_TERM_LINE=0
 
 # Pending structural edits, applied by doc_rebuild().
 declare -a DEL=() INS=()
@@ -153,7 +152,6 @@ declare -A CAT_KNOWN=(
   [temporary]=".pacnew .pacsave .dpkg-old .dpkg-new .dpkg-dist .rpmnew .rpmsave .rej .pid .lock .log .crdownload"
 )
 declare -A CUR_CAT=()      # lower-cased pattern -> category
-declare -A CUR_SUGGEST=()  # lower-cased pattern -> 1 when it is suggested
 
 # norm_pattern KEY -> RET: the pattern as it appears in LS_COLORS.
 norm_pattern() {
@@ -173,7 +171,6 @@ init_tables() {
     for w in "${words[@]}"; do
       norm_pattern "$w"
       CUR_CAT[$RET]=$cat
-      CUR_SUGGEST[$RET]=1
     done
     read -r -a words <<<"${CAT_KNOWN[$cat]}"
     for w in "${words[@]}"; do
@@ -345,7 +342,7 @@ parse() {
   L_KIND=() L_KEY=() L_VAL=() L_PRE=() L_POST=() L_SEC=() L_ACTIVE=() L_SCOPE=() L_NORM=()
   SEC_TITLE=("(no section)") SEC_LINE=(0) SEC_CAT=("")
   PAT_LINES=() LPAT=() TYPE_LINES=() PAT_ORDER=()
-  LAST_COLOUR_LINE=0 FIRST_TERM_LINE=0
+  LAST_COLOUR_LINE=0
   init_tables
 
   for (( i = 1; i <= N; i++ )); do
@@ -392,7 +389,6 @@ parse() {
     L_KIND[i]=$kind L_NORM[i]=$norm
 
     if [[ $kind == term ]]; then
-      (( FIRST_TERM_LINE )) || FIRST_TERM_LINE=$i
       (( prev_term )) || scope=""
       scope+="${scope:+, }$val"
       prev_term=1
@@ -464,7 +460,7 @@ SGR_EXT=0 SGR_PAD=1 SGR_ZERO=0
 # attributes (1 bold, 2 dim, 4 underline, 7 reverse) and the rest.
 sgr_parse() {
   local v=$1 n tok i a b c
-  local -a t=()
+  local -a toks=()
   SGR_FG="" SGR_BG="" SGR_ATTRS=" " SGR_EXTRA="" SGR_BAD="" SGR_UNKNOWN=""
   SGR_EXT=0 SGR_PAD=1 SGR_ZERO=0
   if [[ -z $v || $v == \;* || $v == *\; || $v == *\;\;* ]]; then
@@ -472,9 +468,9 @@ sgr_parse() {
     return
   fi
   [[ ";$v;" =~ \;[1-9]\; ]] && SGR_PAD=0
-  IFS=';' read -r -a t <<<"$v"
-  for (( i = 0; i < ${#t[@]}; i++ )); do
-    tok=${t[i]}
+  IFS=';' read -r -a toks <<<"$v"
+  for (( i = 0; i < ${#toks[@]}; i++ )); do
+    tok=${toks[i]}
     if [[ ! $tok =~ $RE_NUM ]] || (( ${#tok} > 3 )); then
       SGR_BAD+="${SGR_BAD:+ }$tok"
       continue
@@ -482,15 +478,15 @@ sgr_parse() {
     n=$(( 10#$tok ))
     case $n in
       38|48)
-        a=${t[i+1]:-} b=""
-        if [[ $a == 5 || $a == 05 ]] && [[ ${t[i+2]:-} =~ $RE_NUM ]] && (( 10#${t[i+2]} <= 255 )); then
-          b="$tok;$a;${t[i+2]}"
+        a=${toks[i+1]:-} b=""
+        if [[ $a == 5 || $a == 05 ]] && [[ ${toks[i+2]:-} =~ $RE_NUM ]] && (( 10#${toks[i+2]} <= 255 )); then
+          b="$tok;$a;${toks[i+2]}"
           (( i += 2 ))
         elif [[ $a == 2 || $a == 02 ]]; then
           b="$tok;$a"
           for c in 2 3 4; do
-            if [[ ${t[i+c]:-} =~ $RE_NUM ]] && (( 10#${t[i+c]} <= 255 )); then
-              b+=";${t[i+c]}"
+            if [[ ${toks[i+c]:-} =~ $RE_NUM ]] && (( 10#${toks[i+c]} <= 255 )); then
+              b+=";${toks[i+c]}"
             else
               b=""
               break
@@ -542,15 +538,15 @@ sgr_compose() {
 
 # read_file PATH: load the file into SRC/ORIG and parse it.
 read_file() {
-  local -a raw=()
-  if ! mapfile -t raw <"$1"; then
+  local -a file_lines=()
+  if ! mapfile -t file_lines <"$1"; then
     err "cannot read $1"
     return 1
   fi
   FILE_EOL=1
   if [[ -s $1 && -n $(tail -c 1 -- "$1") ]]; then FILE_EOL=0; fi
-  SRC=("" "${raw[@]}")
-  N=${#raw[@]}
+  SRC=("" "${file_lines[@]}")
+  N=${#file_lines[@]}
   ORIG=("${SRC[@]}")
   DEL=() INS=()
   parse
@@ -569,15 +565,15 @@ insert_after() { INS[$1]+="$2$NL"; }   # line 0 inserts at the top
 
 doc_rebuild() {
   local i l
-  local -a out=("") extra=()
+  local -a doc=("") extra=()
   for (( i = 0; i <= N; i++ )); do
-    if (( i > 0 )) && [[ -z ${DEL[i]:-} ]]; then out+=("${SRC[i]}"); fi
+    if (( i > 0 )) && [[ -z ${DEL[i]:-} ]]; then doc+=("${SRC[i]}"); fi
     if [[ -n ${INS[i]:-} ]]; then
       mapfile -t extra <<<"${INS[i]%"$NL"}"
-      for l in "${extra[@]}"; do out+=("$l"); done
+      for l in "${extra[@]}"; do doc+=("$l"); done
     fi
   done
-  SRC=("${out[@]}")
+  SRC=("${doc[@]}")
   N=$(( ${#SRC[@]} - 1 ))
   DEL=() INS=()
   parse
@@ -662,7 +658,7 @@ DIFF_ADDED=0 DIFF_REMOVED=0
 make_diff() {
   local n=$(( ${#ORIG[@]} - 1 )) m=$N s=0 e=0 i j an bn w k x y
   local -A ids=()
-  local -a ia=() ib=() t=()
+  local -a ia=() ib=() tbl=()
   DIFF=() DIFF_ADDED=0 DIFF_REMOVED=0
   while (( s < n && s < m )) && [[ ${ORIG[s+1]} == "${SRC[s+1]}" ]]; do (( s++ )); done
   while (( e < n - s && e < m - s )) && [[ ${ORIG[n-e]} == "${SRC[m-e]}" ]]; do (( e++ )); done
@@ -687,15 +683,15 @@ make_diff() {
       ib[j]=${ids[$x]}
     done
     w=$(( bn + 1 ))
-    for (( j = 0; j <= bn; j++ )); do t[an*w+j]=0; done
+    for (( j = 0; j <= bn; j++ )); do tbl[an*w+j]=0; done
     for (( i = an - 1; i >= 0; i-- )); do
-      t[i*w+bn]=0
+      tbl[i*w+bn]=0
       for (( j = bn - 1; j >= 0; j-- )); do
         if (( ia[i] == ib[j] )); then
-          t[i*w+j]=$(( t[(i+1)*w+j+1] + 1 ))
+          tbl[i*w+j]=$(( tbl[(i+1)*w+j+1] + 1 ))
         else
-          x=${t[(i+1)*w+j]} y=${t[i*w+j+1]}
-          t[i*w+j]=$(( x > y ? x : y ))
+          x=${tbl[(i+1)*w+j]} y=${tbl[i*w+j+1]}
+          tbl[i*w+j]=$(( x > y ? x : y ))
         fi
       done
     done
@@ -704,7 +700,7 @@ make_diff() {
       if (( i < an && j < bn && ia[i] == ib[j] )); then
         DIFF+=("= $(( s + i + 1 )) $(( s + j + 1 ))")
         (( i++, j++ ))
-      elif (( j >= bn || ( i < an && t[(i+1)*w+j] >= t[i*w+j+1] ) )); then
+      elif (( j >= bn || ( i < an && tbl[(i+1)*w+j] >= tbl[i*w+j+1] ) )); then
         DIFF+=("- $(( s + i + 1 )) 0")
         (( i++ ))
       else
@@ -886,6 +882,8 @@ offer_sample() {
     exit 1
   fi
   printf 'Created %s. To use it, add this line to your shell start-up file:\n' "$target"
+  # The command substitution is text for the user to copy, not to be run here.
+  # shellcheck disable=SC2016
   printf '  eval "$(dircolors -b %s)"\n\n' "$target"
   FILE=$target
 }
@@ -961,7 +959,7 @@ declare -a SCAN_EXT=()
 # compute_majorities: the colour that more than half of the entries of a
 # category have. New entries of that category get the same colour.
 compute_majorities() {
-  local -A count=() total=()
+  local -A tally=() sum=()
   local p cat val k lowers=0 twins=0
   CAT_MAJ=()
   for p in "${PAT_ORDER[@]}"; do
@@ -971,17 +969,17 @@ compute_majorities() {
     entry_category "$p" "${L_SEC[RET2]}"
     cat=$RET
     if [[ -n $cat ]]; then
-      total[$cat]=$(( ${total[$cat]:-0} + 1 ))
-      count[$cat $val]=$(( ${count[$cat $val]:-0} + 1 ))
+      sum[$cat]=$(( ${sum[$cat]:-0} + 1 ))
+      tally[$cat $val]=$(( ${tally[$cat $val]:-0} + 1 ))
     fi
     if [[ $p == \*.* && $p == "${p,,}" && $p == *[a-z]* ]]; then
       lowers=$(( lowers + 1 ))
       [[ -n ${PAT_LINES[${p^^}]:-} ]] && twins=$(( twins + 1 ))
     fi
   done
-  for k in "${!count[@]}"; do
+  for k in "${!tally[@]}"; do
     cat=${k%% *}
-    if (( ${count[$k]} * 2 > ${total[$cat]} )); then CAT_MAJ[$cat]=${k#* }; fi
+    if (( ${tally[$k]} * 2 > ${sum[$cat]} )); then CAT_MAJ[$cat]=${k#* }; fi
   done
   TWIN_CONVENTION=0
   if (( twins > 0 && twins * 2 >= lowers )); then TWIN_CONVENTION=1; fi
@@ -1018,7 +1016,7 @@ scan_dir() {
   restore=$(shopt -p nullglob)
   shopt -s nullglob
   scan_walk "${1%/}"
-  $restore
+  eval "$restore"
   for p in "${!SCAN_COUNT[@]}"; do
     covered=0
     for q in "${PAT_ORDER[@]}"; do
@@ -1138,21 +1136,22 @@ twin_groups() {
   done
 }
 
-# flush_mismatch: report a run of lines that the current TERM switches off.
-# Uses the locals first, last, n, scope and term of run_checks.
+# flush_mismatch TERM: report the run of lines MM_FIRST..MM_LAST that the
+# current TERM switches off, and start over.
+MM_FIRST=0 MM_LAST=0 MM_N=0 MM_SCOPE=""
 flush_mismatch() {
-  local x=$scope
-  (( first )) || return
+  local x=$MM_SCOPE
+  (( MM_FIRST )) || return
   (( ${#x} > 60 )) && x="${x:0:57}..."
-  add_finding warning term-mismatch "$first" \
-    "lines $first to $last ($n colour lines) only apply when TERM matches: $x" \
-    "Your TERM is \"$term\", so ls never sees these lines." \
+  add_finding warning term-mismatch "$MM_FIRST" \
+    "lines $MM_FIRST to $MM_LAST ($MM_N colour lines) only apply when TERM matches: $x" \
+    "Your TERM is \"$1\", so ls never sees these lines." \
     "fix does not change them; check with --term NAME how another terminal fares."
-  first=0
+  MM_FIRST=0
 }
 
 run_checks() {
-  local i kind key val code p lines first last n scope cat sec list why fix sev x total
+  local i kind key val code p lines first last n cat sec list why fix sev x total
   local term=${OPT_TERM:-${TERM:-}}
   F_SEV=() F_ID=() F_LINE=() F_WHAT=() F_WHY=() F_FIX=()
 
@@ -1295,20 +1294,20 @@ run_checks() {
       "TERM lines only restrict the colour lines that follow them, and none follow, so they do nothing." \
       "fix offers to remove them."
   fi
-  first=0 last=0 n=0 scope=""
+  MM_FIRST=0 MM_LAST=0 MM_N=0 MM_SCOPE=""
   for (( i = 1; i <= N; i++ )); do
     case ${L_KIND[i]} in
       blank|comment|term|other) continue ;;
     esac
     if (( L_ACTIVE[i] )); then
-      flush_mismatch
+      flush_mismatch "$term"
     else
-      [[ ${L_SCOPE[i]} == "$scope" ]] || flush_mismatch
-      if (( ! first )); then first=$i scope=${L_SCOPE[i]} n=0; fi
-      last=$i n=$(( n + 1 ))
+      [[ ${L_SCOPE[i]} == "$MM_SCOPE" ]] || flush_mismatch "$term"
+      if (( ! MM_FIRST )); then MM_FIRST=$i MM_SCOPE=${L_SCOPE[i]} MM_N=0; fi
+      MM_LAST=$i MM_N=$(( MM_N + 1 ))
     fi
   done
-  flush_mismatch
+  flush_mismatch "$term"
 
   # --- missing file types and entries -------------------------------------
   find_missing
@@ -1367,18 +1366,22 @@ wrap() {
   [[ -n $line ]] && printf '%s%s%s%s\n' "$pre" "$indent" "$line" "$post"
 }
 
+# findings_order: the indices of the findings sorted by line number; findings
+# about the whole file come last.
+findings_order() {
+  local i n
+  for i in "${!F_SEV[@]}"; do
+    n=${F_LINE[i]}
+    (( n )) || n=9999999
+    printf '%s %s\n' "$n" "$i"
+  done | LC_ALL=C sort -s -n -k1,1
+}
+
 # print_findings: grouped by severity. Returns 1 when there are findings.
 print_findings() {
   local sev title colour i n where shown=0 nerr=0 nwarn=0 ninfo=0 legend=0
   local -a order=()
-  # by line number; findings about the whole file come last
-  mapfile -t order < <(
-    for i in "${!F_SEV[@]}"; do
-      n=${F_LINE[i]}
-      (( n )) || n=9999999
-      printf '%s %s\n' "$n" "$i"
-    done | LC_ALL=C sort -s -n -k1,1
-  )
+  mapfile -t order < <(findings_order)
   for sev in error warning info; do
     n=0
     for i in "${!F_SEV[@]}"; do [[ ${F_SEV[i]} == "$sev" ]] && n=$(( n + 1 )); done
@@ -1528,7 +1531,7 @@ make_type_samples() {
   for f in /dev/sd? /dev/vd? /dev/nvme?n? /dev/loop? /dev/dm-? /dev/ram? /dev/disk?; do
     if [[ -b $f ]]; then PV_BLK=$f; break; fi
   done
-  $restore
+  eval "$restore"
   [[ -n $PV_SOCK ]] || PV_SKIPPED+=(socket)
   [[ -n $PV_CHR ]] || PV_SKIPPED+=(char_device)
   [[ -n $PV_BLK ]] || PV_SKIPPED+=(block_device)
@@ -1707,6 +1710,7 @@ cmd_preview() {
 ASK_EOF=0                 # 1 once standard input has run dry
 ST_HPRE="# " ST_HPOST="" ST_SEP=" "   # how the file writes headings and entries
 declare -a REORG=() REORG_MOVES=() REORG_FLIPS=()
+declare -A REORG_TGT=() REORG_RANK=()   # pattern -> target section, section -> rank
 
 # ask PROMPT: read one line into REPLY. At end of input every further
 # question is answered with "" (which always means: do nothing).
@@ -1725,8 +1729,8 @@ ask() {
   return 0
 }
 
-# yes PROMPT: true only on an explicit y.
-yes() {
+# confirm PROMPT: true only on an explicit y.
+confirm() {
   ask "$1 [y/N]"
   [[ $REPLY == [yY] || $REPLY == [yY][eE][sS] ]]
 }
@@ -1765,7 +1769,7 @@ style_detect() {
 # --- step 1: duplicates ----------------------------------------------------
 
 fix_duplicates() {
-  local -a keys=() idx=()
+  local -a keys=() pick=()
   local p lines i k last name all=0 choice
   for p in "${PAT_ORDER[@]}"; do
     [[ ${PAT_LINES[$p]} == " "*" "* ]] && keys+=("$p")
@@ -1791,11 +1795,11 @@ fix_duplicates() {
     fi
     effective "$lines"
     last=$RET2
-    k=0 idx=()
+    k=0 pick=()
     printf '\n'
     for i in $lines; do
       k=$(( k + 1 ))
-      idx[k]=$i
+      pick[k]=$i
       paint "${L_VAL[i]}" "$name"
       printf '    %d) line %-4s %-10s %-10s %s' "$k" "$i" "${L_KEY[i]}" "${L_VAL[i]}" "$RET"
       [[ ${L_KIND[i]} == pattern ]] && printf '  %s(%s)%s' "$C_D" "${SEC_TITLE[${L_SEC[i]}]}" "$C_0"
@@ -1825,9 +1829,9 @@ fix_duplicates() {
     fi
     [[ -n $choice ]] || continue
     for (( i = 1; i <= k; i++ )); do
-      (( i == choice )) || delete_line "${idx[i]}"
+      (( i == choice )) || delete_line "${pick[i]}"
     done
-    printf '  Keeping line %s.\n' "${idx[choice]}"
+    printf '  Keeping line %s.\n' "${pick[choice]}"
   done
   refresh
 }
@@ -1863,7 +1867,7 @@ fix_cleanup() {
   if (( ${#obsolete[@]} )); then
     any=1
     printf '  %d obsolete keyword lines (%s): dircolors ignores them.\n' "${#obsolete[@]}" "$list"
-    if yes "  Remove them, and the comment directly above each?"; then
+    if confirm "  Remove them, and the comment directly above each?"; then
       for i in "${obsolete[@]}"; do delete_block "$i" "$i"; done
     fi
   fi
@@ -1871,7 +1875,7 @@ fix_cleanup() {
     any=1
     printf '  %d TERM lines (lines %s to %s) come after the last colour line, so they restrict nothing.\n' \
       "${#dead[@]}" "${dead[0]}" "${dead[${#dead[@]}-1]}"
-    if yes "  Remove them, and the comment directly above them?"; then
+    if confirm "  Remove them, and the comment directly above them?"; then
       # blank lines and comments between the TERM lines stay
       last=${dead[0]}
       for i in "${dead[@]}"; do
@@ -1888,7 +1892,7 @@ fix_cleanup() {
     (( ${#REDUNDANT_TWINS[@]} > 8 )) && list+=" ..."
     printf '  %d case twins (%s) repeat the colour of their lower-case entry.\n' "${#REDUNDANT_TWINS[@]}" "$list"
     printf '  Your ls matches extensions without regard to case, so they are redundant.\n'
-    if yes "  Remove them?"; then
+    if confirm "  Remove them?"; then
       for i in "${REDUNDANT_TWINS[@]}"; do delete_line "$i"; done
     fi
   fi
@@ -1914,7 +1918,7 @@ add_missing_types() {
     return
   fi
   printf '  File types that are not set, with the values of the system database:\n    %s\n' "$list"
-  yes "  Add them?" || return
+  confirm "  Add them?" || return
   for code in "${!TYPE_LINES[@]}"; do
     for i in ${TYPE_LINES[$code]}; do (( i > pos )) && pos=$i; done
   done
@@ -1937,7 +1941,7 @@ add_missing_types() {
 # each at the end of the section of its category.
 queue_missing() {
   local -A newsec=()
-  local i s cat pos key line last=0 count=0
+  local i s cat pos key line last=0 added=0
   for (( i = 1; i <= N; i++ )); do
     case ${L_KIND[i]} in
       pattern|type) [[ -z ${L_SCOPE[i]} ]] && last=$i ;;
@@ -1956,7 +1960,7 @@ queue_missing() {
     if (( TWIN_CONVENTION && ! OPT_CASE )) && [[ ${M_PAT[i]} == \*.* && $key != "${key^^}" ]]; then
       line+="$NL${key^^}$ST_SEP${M_VAL[i]}"
     fi
-    count=$(( count + 1 ))
+    added=$(( added + 1 ))
     if (( pos )); then
       # after the last pattern of the existing section
       s=$pos pos=0
@@ -1972,12 +1976,12 @@ queue_missing() {
     [[ -n ${newsec[$cat]:-} ]] || continue
     insert_after "$last" "$NL$ST_HPRE$cat$ST_HPOST$NL${newsec[$cat]%"$NL"}"
   done
-  printf '  %d entries queued.\n' "$count"
+  printf '  %d entries queued.\n' "$added"
 }
 
 fix_missing() {
   local -a chosen=() cats=()
-  local cat i n none line src stop=0
+  local cat i n none line tag stop=0
   step 3 "missing entries"
   style_detect
   if (( ! ${#MT_CODE[@]} && ! ${#M_PAT[@]} )); then
@@ -1993,17 +1997,17 @@ fix_missing() {
       for i in "${!M_PAT[@]}"; do
         [[ ${M_CAT[i]} == "$cat" ]] || continue
         pattern_key "${M_PAT[i]}"
-        src=${M_SRC[i]}
-        src=${src//curated/c}
-        src=${src//database/d}
-        src=${src//scan/s}
-        src=${src//, /}
+        tag=${M_SRC[i]}
+        tag=${tag//curated/c}
+        tag=${tag//database/d}
+        tag=${tag//scan/s}
+        tag=${tag//, /}
         if [[ -n ${M_VAL[i]} ]]; then
           n=$(( n + 1 ))
           paint "${M_VAL[i]}" "$RET"
-          line+="$RET$C_D[$src]$C_0 "
+          line+="$RET$C_D[$tag]$C_0 "
         else
-          none+="$RET[$src] "
+          none+="$RET[$tag] "
         fi
       done
       [[ -n $line$none ]] || continue
@@ -2045,7 +2049,9 @@ fix_missing() {
               [[ ${M_CAT[i]} == "$cat" && -n ${M_VAL[i]} ]] || continue
               pattern_key "${M_PAT[i]}"
               paint "${M_VAL[i]}" "$RET"
-              ask "    $RET  ${M_VAL[i]}  ($cat; ${M_SRC[i]})? [y/N, q = stop asking]"
+              tag=${SCAN_COUNT[${M_PAT[i]}]:-}
+              [[ -n $tag ]] && tag=", $tag file(s) found"
+              ask "    $RET  ${M_VAL[i]}  (${M_WHY[i]}; source: ${M_SRC[i]}$tag)? [y/N, q = stop asking]"
               if [[ $REPLY == [qQ] ]] || (( ASK_EOF )); then stop=1; break; fi
               [[ $REPLY == [yY] ]] && chosen+=("$i")
             done
@@ -2060,15 +2066,33 @@ fix_missing() {
 
 # --- step 4: reorganise ------------------------------------------------------
 
+# reorg_keys: one sort key per movable pattern line: section rank, the
+# pattern it extends (or itself), pattern, spelling, line number.
+reorg_keys() {
+  local i k p lp lit root spec q variant
+  for (( i = 1; i <= N; i++ )); do
+    [[ ${L_KIND[i]} == pattern && -z ${L_SCOPE[i]} ]] || continue
+    p=${L_NORM[i]} lp=${p,,}
+    lit=${lp#\*} root=$lp spec=0
+    for (( k = 1; k < ${#lit}; k++ )); do
+      q="*${lit:k}"
+      if [[ -n ${LPAT[$q]:-} && ${REORG_TGT[$q]:-} == "${REORG_TGT[$lp]}" ]]; then root=$q spec=1; fi
+    done
+    variant=1
+    [[ $p == "$lp" ]] && variant=0
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${REORG_RANK[${REORG_TGT[$lp]}]}" "$root" "$spec" "$lp" "$variant" "$i"
+  done
+}
+
 # build_reorganised: REORG becomes the document with its pattern lines
 # grouped by category and sorted inside each section. Only pattern lines
 # that apply to every terminal move; everything else stays where it is.
 build_reorganised() {
-  local -A has=() sec_for_cat=() newcat=() tgt=() rank=() hdr=()
-  local -a order=() final=() sorted=() out=("") drop=() newpos=()
-  local i s cat tok lp lit k root spec p q first=0 lastcat=-1 n=0 r cur="" emitted=0 rest=0
-  local key variant heading a b va vb name
-  REORG=() REORG_MOVES=() REORG_FLIPS=()
+  local -A has=() sec_for_cat=() newcat=() hdr=()
+  local -a order=() final=() sorted=() doc=("") drop=() newpos=()
+  local i s cat tok lp lit k p q first=0 lastcat=-1 r cur="" emitted=0 rest=0
+  local key heading a b va vb name
+  REORG=() REORG_MOVES=() REORG_FLIPS=() REORG_TGT=() REORG_RANK=()
   style_detect
 
   for (( i = 1; i <= N; i++ )); do
@@ -2097,7 +2121,7 @@ build_reorganised() {
     else
       tok=${L_SEC[i]}
     fi
-    tgt[$lp]=$tok
+    REORG_TGT[$lp]=$tok
     if [[ $tok != "${L_SEC[i]}" ]]; then
       if [[ $tok == new:* ]]; then name=${tok#new:}; else name=${SEC_TITLE[tok]}; fi
       REORG_MOVES+=("${L_KEY[i]} -> $name")
@@ -2116,7 +2140,7 @@ build_reorganised() {
     for cat in $CAT_ORDER; do [[ -n ${newcat[$cat]:-} ]] && final+=("new:$cat"); done
   fi
   final+=(0)
-  for i in "${!final[@]}"; do rank[${final[i]}]=$i; done
+  for i in "${!final[@]}"; do REORG_RANK[${final[i]}]=$i; done
 
   # what leaves its place: pattern lines, the comment block above a section
   # and comments inside it, and the blank lines that follow
@@ -2142,20 +2166,7 @@ build_reorganised() {
   # first, original order last. A pattern that extends another one of the
   # same section (.tar.gz and .gz) follows it, because ls lets the later
   # line win and the longer pattern should.
-  mapfile -t sorted < <(
-    for (( i = 1; i <= N; i++ )); do
-      [[ ${L_KIND[i]} == pattern && -z ${L_SCOPE[i]} ]] || continue
-      p=${L_NORM[i]} lp=${p,,}
-      lit=${lp#\*} root=$lp spec=0
-      for (( k = 1; k < ${#lit}; k++ )); do
-        q="*${lit:k}"
-        if [[ -n ${LPAT[$q]:-} && ${tgt[$q]:-} == "${tgt[$lp]}" ]]; then root=$q spec=1; fi
-      done
-      variant=1
-      [[ $p == "$lp" ]] && variant=0
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${rank[${tgt[$lp]}]}" "$root" "$spec" "$lp" "$variant" "$i"
-    done | LC_ALL=C sort -t "$TAB" -k1,1n -k2,2 -k3,3n -k4,4 -k5,5n -k6,6n
-  )
+  mapfile -t sorted < <(reorg_keys | LC_ALL=C sort -t "$TAB" -k1,1n -k2,2 -k3,3n -k4,4 -k5,5n -k6,6n)
 
   for (( i = 1; i <= N; i++ )); do
     if (( i == first )); then
@@ -2163,27 +2174,27 @@ build_reorganised() {
         r=${key%%"$TAB"*}
         tok=${final[r]}
         if [[ $tok != "$cur" ]]; then
-          (( emitted )) && out+=("")
+          (( emitted )) && doc+=("")
           cur=$tok emitted=1
           heading=""
           case $tok in
             new:*) heading="$ST_HPRE${tok#new:}$ST_HPOST" ;;
-            0)     (( ${#rank[@]} > 1 && ${#sorted[@]} > 0 )) && [[ ${sorted[0]%%"$TAB"*} != "$r" ]] && heading="${ST_HPRE}other$ST_HPOST" ;;
+            0)     (( ${#REORG_RANK[@]} > 1 && ${#sorted[@]} > 0 )) && [[ ${sorted[0]%%"$TAB"*} != "$r" ]] && heading="${ST_HPRE}other$ST_HPOST" ;;
             *)     heading=${hdr[$tok]%"$NL"} ;;
           esac
           if [[ -n $heading ]]; then
-            while IFS= read -r q; do out+=("$q"); done <<<"$heading"
+            while IFS= read -r q; do doc+=("$q"); done <<<"$heading"
           fi
         fi
         k=${key##*"$TAB"}
-        out+=("${SRC[k]}")
-        newpos[$k]=${#out[@]}
+        doc+=("${SRC[k]}")
+        newpos[$k]=${#doc[@]}
       done
-      (( rest )) && out+=("")
+      (( rest )) && doc+=("")
     fi
-    [[ -n ${drop[$i]:-} ]] || out+=("${SRC[i]}")
+    [[ -n ${drop[$i]:-} ]] || doc+=("${SRC[i]}")
   done
-  REORG=("${out[@]}")
+  REORG=("${doc[@]}")
 
   # would the new order change which of two overlapping patterns wins?
   for p in "${PAT_ORDER[@]}"; do
@@ -2240,7 +2251,7 @@ fix_reorganise() {
       "$C_Y" "${#REORG_FLIPS[@]}" "$C_0"
     for x in "${REORG_FLIPS[@]}"; do printf '    %s\n' "$x"; done
   fi
-  if yes "  Reorganise?"; then
+  if confirm "  Reorganise?"; then
     SRC=("${REORG[@]}")
     N=$(( ${#SRC[@]} - 1 ))
     DEL=() INS=()
@@ -2277,12 +2288,14 @@ review_and_save() {
     err "dircolors would reject the result, so nothing was written. Please report this as a bug."
     return 1
   fi
-  if ! yes "Write these changes to $FILE?"; then
+  if ! confirm "Write these changes to $FILE?"; then
     printf 'Nothing was written.\n'
     return 1
   fi
   save_file || return 1
   printf 'Written. Backup of the old file: %s\n' "$BACKUP_PATH"
+  # The command substitution is text for the user to copy, not to be run here.
+  # shellcheck disable=SC2016
   printf 'Load the new colours with: eval "$(%s -b %s)"\n' "$DC" "$FILE"
   return 0
 }
@@ -2672,7 +2685,7 @@ picker_value() {
 # picker_move DY DX: move inside the grid of the focused field; leaving it at
 # the top or bottom goes to the neighbouring field.
 picker_move() {
-  local dy=$1 dx=$2 idx row0 count rows=1 row col
+  local dy=$1 dx=$2 idx row0 ncells rows=1 row col
   PK_RAW=""
   if (( PK_FIELD == 2 )); then
     PK_AT=$(( PK_AT + dx ))
@@ -2682,15 +2695,15 @@ picker_move() {
     return
   fi
   if (( PK_FIELD == 0 )); then
-    idx=$PK_FG row0=$FG_ROW0 count=${#FG_CELLS[@]}
+    idx=$PK_FG row0=$FG_ROW0 ncells=${#FG_CELLS[@]}
   else
-    idx=$PK_BG row0=$BG_ROW0 count=${#BG_CELLS[@]}
+    idx=$PK_BG row0=$BG_ROW0 ncells=${#BG_CELLS[@]}
   fi
   (( OPT_256 )) && rows=8
   if (( dx )); then
     idx=$(( idx + dx ))
     (( idx < 0 )) && idx=0
-    (( idx >= count )) && idx=$(( count - 1 ))
+    (( idx >= ncells )) && idx=$(( ncells - 1 ))
     PK_TOUCHED=1
   else
     grid_row "$idx" "$row0"
@@ -2710,9 +2723,10 @@ picker_move() {
   if (( PK_FIELD == 0 )); then PK_FG=$idx; else PK_BG=$idx; fi
 }
 
-# draw_grid FIELD -> appends to the caller's buf and y.
+# draw_grid FIELD Y -> RET: the rows of the palette starting at screen row Y,
+# RET2: the screen row after them.
 draw_grid() {
-  local field=$1 idx row0 rows=1 r i line
+  local field=$1 y=$2 idx row0 rows=1 r i line buf="" first last
   local -a cells=()
   if (( field == 0 )); then
     cells=("${FG_CELLS[@]}") idx=$PK_FG row0=$FG_ROW0
@@ -2723,16 +2737,17 @@ draw_grid() {
   (( OPT_256 && PK_FIELD == field )) && rows=8
   for (( r = 0; r < rows; r++ )); do
     grid_start "$r" "$row0"
+    first=$RET last=$(( RET + RET2 ))
     line="    "
-    for (( i = RET; i < RET + RET2 && i < ${#cells[@]}; i++ )); do
+    for (( i = first; i < last && i < ${#cells[@]}; i++ )); do
       swatch "${cells[i]}" "$(( i == idx ))"
       line+=$RET
       (( r == 0 )) && line+=" "
-      grid_start "$r" "$row0"
     done
     buf+="${ESC}[${y};1H${ESC}[K$line"
     y=$(( y + 1 ))
   done
+  RET=$buf RET2=$y
 }
 
 draw_picker() {
@@ -2763,7 +2778,9 @@ draw_picker() {
     if (( PK_FIELD == f )); then title="${C_B}> $title${C_0}"; else title="  $title"; fi
     buf+="${ESC}[${y};1H${ESC}[K$title"
     y=$(( y + 1 ))
-    draw_grid "$f"
+    draw_grid "$f" "$y"
+    buf+=$RET
+    y=$RET2
     buf+="${ESC}[${y};1H${ESC}[K"
     y=$(( y + 1 ))
   done
@@ -2904,7 +2921,7 @@ save_staged() {
 
 show_help() {
   local buf y=3 line
-  local -a text=(
+  local -a help_lines=(
     "Keys in the list"
     "  up / down, j / k     move            PgUp / PgDn, g / G   move further"
     "  Enter, l             edit the colour of the entry"
@@ -2927,7 +2944,7 @@ show_help() {
   )
   title_bar
   buf="$RET${ESC}[2;1H${ESC}[K"
-  for line in "${text[@]}"; do
+  for line in "${help_lines[@]}"; do
     (( y < ROWS - 1 )) || break
     buf+="${ESC}[${y};1H${ESC}[K  ${line:0:$(( COLS - 2 ))}"
     y=$(( y + 1 ))
@@ -3061,17 +3078,18 @@ Options for every command:
   -V, --version       show the version
 
 Every option with "colour" in its name also accepts the spelling "color".
+Each command has more options: $PROG help COMMAND
 EOF
 }
 
 main() {
   local cmd="" arg
-  local -a rest=()
+  local -a positional=()
   while (( $# )); do
     arg=$1
     shift
     case $arg in
-      -h|--help)    rest+=("--help") ;;
+      -h|--help)    positional+=("--help") ;;
       -V|--version) printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
       --256)        OPT_256=1 ;;
       --case-sensitive) OPT_CASE=1 ;;
@@ -3088,10 +3106,10 @@ main() {
         (( $# )) || die "$arg needs auto, always or never"; OPT_COLOUR=$1; shift ;;
       --colour=*|--color=*) OPT_COLOUR=${arg#*=} ;;
       --no-colour|--no-color) OPT_COLOUR=never ;;
-      --)           while (( $# )); do rest+=("$1"); shift; done ;;
+      --)           while (( $# )); do positional+=("$1"); shift; done ;;
       -?*)          die "unknown option: $arg (try $PROG --help)" ;;
       *)
-        if [[ -z $cmd ]]; then cmd=$arg; else rest+=("$arg"); fi ;;
+        if [[ -z $cmd ]]; then cmd=$arg; else positional+=("$arg"); fi ;;
     esac
   done
   case $OPT_COLOUR in
@@ -3103,7 +3121,7 @@ main() {
 
   local want_help=0
   local -a files=()
-  for arg in "${rest[@]}"; do
+  for arg in "${positional[@]}"; do
     if [[ $arg == --help ]]; then want_help=1; else files+=("$arg"); fi
   done
   if [[ $cmd == help ]]; then
