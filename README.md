@@ -2,7 +2,7 @@
 
 My terminal tool for the file that decides the colours of `ls`: it previews, checks, repairs and edits a GNU `dircolors` configuration. One bash script, no dependencies beyond bash and GNU coreutils.
 
-<p align="center"><em>Screenshot placeholder: <code>docs/screenshot.png</code> (the editor with the colour picker open)</em></p>
+<p align="center"><img src="docs/screenshot.png" alt="The colour picker of the editor: a sample name in its current colour, the palettes for foreground and background, and the switches for bold, dim, underline, reverse and blink" width="544"></p>
 
 ## Install
 
