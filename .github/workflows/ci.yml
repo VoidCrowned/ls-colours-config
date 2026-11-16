@@ -26,7 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The official bash image is Alpine with BusyBox, so GNU coreutils are added.
+      # The official bash image is Alpine with BusyBox, so GNU coreutils are added,
+      # and util-linux for the script command that drives the editor tests.
       - run: >
           docker run --rm -v "$PWD:/repo" -w /repo bash:4.0 sh -c
-          'apk add --no-cache coreutils >/dev/null && bash --version | head -n 1 && bash tests/run.sh --json'
+          'apk add --no-cache coreutils util-linux-misc >/dev/null && bash --version | head -n 1 && bash tests/run.sh --json'
