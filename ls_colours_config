@@ -1,0 +1,1003 @@
+#!/usr/bin/env bash
+#
+# ls_colours_config - preview, check and edit a GNU dircolors configuration file.
+#
+# Needs bash 4.0 or newer and GNU coreutils (ls, dircolors). Nothing else.
+# Licence: WTFPL, see LICENSE.
+
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "ls_colours_config needs bash 4.0 or newer (this is ${BASH_VERSION:-not bash})." >&2
+  echo "On macOS: brew install bash coreutils" >&2
+  exit 1
+fi
+
+shopt -s extglob
+
+VERSION=0.1.0
+PROG=ls_colours_config
+
+# Special characters live in variables: bash 4.0 is picky about $'...' inside
+# quoted parameter expansions.
+ESC=$'\033'
+NL=$'\n'
+TAB=$'\t'
+
+# ---------------------------------------------------------------------------
+# Options and global state
+# ---------------------------------------------------------------------------
+
+OPT_256=0          # --256: allow and offer 256-colour codes
+OPT_CASE=0         # --case-sensitive: treat .deb and .DEB as separate entries
+OPT_DRY=0          # --dry-run: never write
+OPT_KEEP=0         # preview --keep
+OPT_CODES=0        # preview --codes
+OPT_SCAN=""        # --scan DIR
+OPT_TERM=""        # --term NAME: pretend TERM is NAME
+OPT_COLOUR=auto    # --colour=auto|always|never
+OPT_IGNORE=""      # check --ignore id,id
+USE_COLOUR=0
+
+FILE=""            # config file as given or discovered
+FILE_REAL=""       # the same with symlinks resolved; this is what gets written
+FILE_EOL=1         # 1 when the file ends with a newline
+BACKUP_PATH=""     # backup made in this run, if any
+LS=""              # GNU ls
+DC=""              # GNU dircolors
+LS_NOCASE=0        # 1 when this ls matches extensions case-insensitively
+TMP_DIR=""         # sample directory of preview
+TMP_FILE=""        # temp file of an atomic write in progress
+TUI_ACTIVE=0
+STTY_SAVED=""
+RET=""             # return value of helpers (avoids a subshell per call)
+RET2=""
+
+# The document: SRC[1..N] are the lines of the file, ORIG is the text on disk.
+declare -a SRC=() ORIG=()
+N=0
+
+# Per-line model, filled by parse().
+declare -a L_KIND=() L_KEY=() L_VAL=() L_PRE=() L_POST=() L_SEC=() L_ACTIVE=() L_SCOPE=() L_NORM=()
+# Sections of pattern lines. Section 0 collects patterns without a heading.
+declare -a SEC_TITLE=() SEC_LINE=() SEC_CAT=()
+declare -A PAT_LINES=()   # normalised pattern (*.ext) -> " 12 34" line numbers
+declare -A LPAT=()        # lower-cased pattern -> " *.deb *.DEB" spellings in use
+declare -A TYPE_LINES=()  # ls type code (di, ln, ...) -> line numbers
+declare -a PAT_ORDER=()   # normalised patterns in order of first appearance
+LAST_COLOUR_LINE=0        # last line that sets a colour
+FIRST_TERM_LINE=0
+
+# Pending structural edits, applied by doc_rebuild().
+declare -a DEL=() INS=()
+
+# Findings of check.
+declare -a F_SEV=() F_ID=() F_LINE=() F_WHAT=() F_WHY=() F_FIX=()
+
+RE_BLANK='^[[:space:]]*$'
+RE_COMMENT='^[[:space:]]*#'
+RE_ENTRY='^([[:space:]]*)([^[:space:]]+)([[:space:]]*)(.*)$'
+RE_COMMENTED='^[.*]?[^[:space:]]+[[:space:]]+[0-9;]+([[:space:]]*#.*)?$'
+RE_NUM='^[0-9]+$'
+RE_SGR='^[0-9;]+$'
+RE_WORD='^[A-Z_]+$'
+RE_ALNUM='[[:alnum:]]'
+
+# dircolors keywords for file types and the two-letter codes ls uses for them.
+declare -A TYPE_CODE=(
+  [NORMAL]=no [NORM]=no [FILE]=fi [RESET]=rs [DIR]=di [LNK]=ln [LINK]=ln
+  [SYMLINK]=ln [ORPHAN]=or [MISSING]=mi [FIFO]=pi [PIPE]=pi [SOCK]=so
+  [BLK]=bd [BLOCK]=bd [CHR]=cd [CHAR]=cd [DOOR]=do [EXEC]=ex [LEFT]=lc
+  [LEFTCODE]=lc [RIGHT]=rc [RIGHTCODE]=rc [END]=ec [ENDCODE]=ec [SUID]=su
+  [SETUID]=su [SGID]=sg [SETGID]=sg [STICKY]=st [OTHER_WRITABLE]=ow [OWR]=ow
+  [STICKY_OTHER_WRITABLE]=tw [OWT]=tw [CAPABILITY]=ca [MULTIHARDLINK]=mh
+  [CLRTOEOL]=cl
+)
+declare -A TYPE_NAME=(
+  [no]=NORMAL [fi]=FILE [rs]=RESET [di]=DIR [ln]=LINK [or]=ORPHAN [mi]=MISSING
+  [pi]=FIFO [so]=SOCK [bd]=BLK [cd]=CHR [do]=DOOR [ex]=EXEC [su]=SETUID
+  [sg]=SETGID [st]=STICKY [ow]=OTHER_WRITABLE [tw]=STICKY_OTHER_WRITABLE
+  [ca]=CAPABILITY [mh]=MULTIHARDLINK [lc]=LEFT [rc]=RIGHT [ec]=END [cl]=CLRTOEOL
+)
+declare -A TYPE_SAMPLE=(
+  [no]=text [fi]=file [rs]=reset [di]=dir [ln]=link [or]=orphan [mi]=missing
+  [pi]=fifo [so]=socket [bd]=block_device [cd]=char_device [do]=door
+  [ex]=executable [su]=setuid [sg]=setgid [st]=sticky [ow]=other_writable
+  [tw]=sticky_other_writable [ca]=capability [mh]=multihardlink
+)
+# File types a config is expected to set; anything missing is reported.
+TYPES_EXPECTED="di ln or mi pi so bd cd ex su sg st ow tw"
+# Keys whose value is not an SGR colour code.
+TYPES_RAW="lc rc ec cl"
+
+# ---------------------------------------------------------------------------
+# Categories: the curated table of common extensions
+# ---------------------------------------------------------------------------
+
+CAT_ORDER="executables archives images audio video documents source config temporary"
+
+# Words in a section heading that give the section a category.
+declare -A CAT_WORDS=(
+  [executables]="exec binar"
+  [archives]="archiv compress packag"
+  [images]="image picture graphic photo"
+  [audio]="audio music sound"
+  [video]="video movie film"
+  [documents]="document text office book"
+  [source]="source code program script develop"
+  [config]="config dotfile setting"
+  [temporary]="backup temp junk"
+)
+
+# Extensions that are suggested when the config does not colour them.
+declare -A CAT_SUGGEST=(
+  [executables]=".exe .com .bat .cmd .msi .app .appimage .run .bin"
+  [archives]=".tar .tgz .tbz2 .txz .gz .bz2 .xz .zst .lz4 .lzma .zip .7z .rar .cab .cpio .deb .rpm .jar .iso .img .dmg"
+  [images]=".jpg .jpeg .png .gif .bmp .tif .tiff .webp .avif .heic .svg .ico .xcf .psd"
+  [audio]=".mp3 .flac .ogg .oga .opus .m4a .aac .wav .wma .aiff .mid .midi"
+  [video]=".mp4 .mkv .webm .avi .mov .wmv .flv .m4v .mpg .mpeg .ogv"
+  [documents]=".pdf .txt .md .rtf .doc .docx .odt .xls .xlsx .ods .ppt .pptx .odp .csv .epub .tex"
+  [source]=".c .h .cpp .hpp .cc .cs .go .rs .java .kt .py .rb .pl .php .js .mjs .jsx .tsx .lua .sh .bash .zsh .fish .swift .sql .html .htm .css .scss"
+  [config]=".json .yml .yaml .toml .xml .ini .conf .cfg"
+  [temporary]=".bak .tmp .swp .old .orig .part *~"
+)
+# Extensions that are recognised (for section checks and reorganising) but
+# not suggested.
+declare -A CAT_KNOWN=(
+  [executables]=".btm .ps1 .dll .so .apk"
+  [archives]=".tar.gz .tar.xz .tar.bz2 .tar.zst .tbz .tzst .tlz .lz .lzo .lzop .lrz .z .ace .arj .war .ear .pkg .zoo .alz"
+  [images]=".ppm .pgm .pbm .xpm .xbm .tga .pcx .jxl .svgz .mng .cr2 .nef .dng .eps"
+  [audio]=".ape .ac3 .dts .aiffc .au .mka .mpc .ra .spx .weba .m4b"
+  [video]=".ogm .vob .m2ts .3gp .fli .flc .swf .rm .rmvb .asf .qt .m2v .mp4v"
+  [documents]=".ps .djvu .mobi .markdown .mkd .rst .org .pps .ppsx .pot .potm .ott .ots .otp .odg .fodt .textile .nfo"
+  [source]=".coffee .tcl .ex .exs .erl .clj .scala .dart .nim .zig .ml .pm .hs .lisp .el .vim .awk .sed .asm .jsm .jsp .r .vue .diff .patch *makefile *dockerfile"
+  [config]=".rc .properties .desktop .service .bashrc .bash_profile .zshrc .zlogin .vimrc .nvimrc .gitconfig .gitignore .hgrc .hgignore .inputrc .xinitrc .xresources .xdefaults .xmodmap .muttrc .netrc"
+  [temporary]=".pacnew .pacsave .dpkg-old .dpkg-new .dpkg-dist .rpmnew .rpmsave .rej .pid .lock .log .crdownload"
+)
+declare -A CUR_CAT=()      # lower-cased pattern -> category
+declare -A CUR_SUGGEST=()  # lower-cased pattern -> 1 when it is suggested
+
+# norm_pattern KEY -> RET: the pattern as it appears in LS_COLORS.
+norm_pattern() {
+  case $1 in
+    .*) RET="*$1" ;;
+    *)  RET=$1 ;;
+  esac
+}
+
+init_tables() {
+  local cat w
+  [[ ${#CUR_CAT[@]} -gt 0 ]] && return
+  for cat in $CAT_ORDER; do
+    for w in ${CAT_SUGGEST[$cat]}; do
+      norm_pattern "$w"
+      CUR_CAT[$RET]=$cat
+      CUR_SUGGEST[$RET]=1
+    done
+    for w in ${CAT_KNOWN[$cat]}; do
+      norm_pattern "$w"
+      CUR_CAT[$RET]=$cat
+    done
+  done
+}
+
+# section_category TITLE -> RET: category named by a heading, or "".
+section_category() {
+  local title=${1,,} cat w
+  RET=""
+  for cat in $CAT_ORDER; do
+    for w in ${CAT_WORDS[$cat]}; do
+      if [[ $title == *"$w"* ]]; then RET=$cat; return; fi
+    done
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+err()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
+die()  { err "$@"; exit 2; }
+
+setup_colour() {
+  case $OPT_COLOUR in
+    always) USE_COLOUR=1 ;;
+    never)  USE_COLOUR=0 ;;
+    *)      if [[ -t 1 && -z ${NO_COLOR:-} ]]; then USE_COLOUR=1; else USE_COLOUR=0; fi ;;
+  esac
+  if (( USE_COLOUR )); then
+    C_B="${ESC}[1m" C_D="${ESC}[2m" C_R="${ESC}[31m" C_G="${ESC}[32m"
+    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_0="${ESC}[0m"
+  else
+    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
+  fi
+}
+C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
+
+# paint CODE TEXT -> RET: TEXT wrapped in the SGR code, the way ls prints it.
+paint() {
+  if (( USE_COLOUR )) && [[ $1 =~ $RE_SGR ]]; then
+    RET="${ESC}[0;${1}m${2}${ESC}[0m"
+  else
+    RET=$2
+  fi
+}
+
+# sample_name PATTERN -> RET: a file name that the pattern matches.
+sample_name() {
+  local rest=${1#\*}
+  case $rest in
+    .*) RET="example$rest" ;;
+    *)  RET=$rest ;;
+  esac
+}
+
+# strip_sgr TEXT -> RET without escape sequences.
+strip_sgr() {
+  RET=${1//"$ESC"\[*([0-9;])[mK]/}
+}
+
+# resolve_path PATH -> RET: PATH with a final symlink chain followed.
+resolve_path() {
+  local p=$1 t n=0
+  [[ $p == */* ]] || p="./$p"
+  while [[ -L $p ]] && (( n++ < 40 )); do
+    t=$(readlink -- "$p") || break
+    if [[ $t == /* ]]; then p=$t; else p="${p%/*}/$t"; fi
+  done
+  RET=$p
+}
+
+term_size() {
+  local size
+  ROWS=24 COLS=80
+  if size=$(stty size 2>/dev/null </dev/tty) && [[ $size =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+    (( BASH_REMATCH[1] > 0 )) && ROWS=${BASH_REMATCH[1]}
+    (( BASH_REMATCH[2] > 0 )) && COLS=${BASH_REMATCH[2]}
+  elif [[ ${COLUMNS:-} =~ $RE_NUM ]] && (( COLUMNS > 0 )); then
+    COLS=$COLUMNS
+    [[ ${LINES:-} =~ $RE_NUM ]] && (( LINES > 0 )) && ROWS=$LINES
+  fi
+}
+ROWS=24 COLS=80
+
+cleanup() {
+  if (( TUI_ACTIVE )); then
+    TUI_ACTIVE=0
+    printf '%s' "${ESC}[0m${ESC}[?25h${ESC}[?1049l"
+    [[ -n $STTY_SAVED ]] && stty "$STTY_SAVED" 2>/dev/null </dev/tty
+  fi
+  [[ -n $TMP_FILE && -e $TMP_FILE ]] && rm -f -- "$TMP_FILE"
+  if [[ -n $TMP_DIR && -d $TMP_DIR ]]; then
+    if (( OPT_KEEP )); then
+      printf '\nsamples kept in %s\n' "$TMP_DIR"
+    else
+      chmod -R u+rwx -- "$TMP_DIR" 2>/dev/null
+      rm -rf -- "$TMP_DIR"
+    fi
+  fi
+  TMP_DIR="" TMP_FILE=""
+}
+
+install_traps() {
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+}
+
+# ---------------------------------------------------------------------------
+# Tools: find GNU ls and dircolors
+# ---------------------------------------------------------------------------
+
+# A candidate pair is usable when ls knows --color and dircolors can print its
+# database. Besides GNU this accepts compatible reimplementations (uutils).
+tools_usable() {
+  command -v "$1" >/dev/null 2>&1 || return 1
+  command -v "$2" >/dev/null 2>&1 || return 1
+  "$1" --color=always -d / >/dev/null 2>&1 || return 1
+  "$2" --print-database >/dev/null 2>&1 || return 1
+}
+
+detect_tools() {
+  local pair l d
+  [[ -n $LS && -n $DC ]] && return 0
+  if [[ -n ${LSCC_LS:-} || -n ${LSCC_DIRCOLORS:-} ]]; then
+    LS=${LSCC_LS:-ls} DC=${LSCC_DIRCOLORS:-dircolors}
+    tools_usable "$LS" "$DC" && return 0
+    err "$LS / $DC (from LSCC_LS / LSCC_DIRCOLORS) are not GNU ls and dircolors."
+    exit 1
+  fi
+  for pair in "ls dircolors" "gls gdircolors" "gnuls gnudircolors"; do
+    l=${pair% *} d=${pair#* }
+    if tools_usable "$l" "$d"; then LS=$l DC=$d; return 0; fi
+  done
+  err "GNU ls and dircolors not found."
+  err "Install GNU coreutils (macOS: brew install coreutils, which provides gls and gdircolors)."
+  exit 1
+}
+
+# Newer ls versions match extensions without regard to case, as long as the
+# differently-cased entries do not disagree. Ask the installed ls.
+probe_nocase() {
+  local d out
+  LS_NOCASE=0
+  d=$(mktemp -d "${TMPDIR:-/tmp}/lscc.XXXXXX") || return 0
+  : >"$d/probe.lsccprobe"
+  out=$(LS_COLORS='*.LSCCPROBE=01;31' "$LS" --color=always -- "$d/probe.lsccprobe" 2>/dev/null)
+  [[ $out == *"01;31"* ]] && LS_NOCASE=1
+  rm -rf -- "$d"
+}
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+# parse: build the per-line model from SRC[1..N]. Mirrors what dircolors does:
+# a line is KEY VALUE, "#" starts a comment, TERM/COLORTERM lines scope the
+# lines after them.
+parse() {
+  local i line key rest val post t upper kind norm lower
+  local state=G scope="" prev_term=0 pend_title="" pend_line=0 cur=0 subject
+  local term=${OPT_TERM:-${TERM:-}}
+  L_KIND=() L_KEY=() L_VAL=() L_PRE=() L_POST=() L_SEC=() L_ACTIVE=() L_SCOPE=() L_NORM=()
+  SEC_TITLE=("(no section)") SEC_LINE=(0) SEC_CAT=("")
+  PAT_LINES=() LPAT=() TYPE_LINES=() PAT_ORDER=()
+  LAST_COLOUR_LINE=0 FIRST_TERM_LINE=0
+  init_tables
+
+  for (( i = 1; i <= N; i++ )); do
+    line=${SRC[i]}
+    L_KIND[i]=blank L_KEY[i]="" L_VAL[i]="" L_PRE[i]="" L_POST[i]=""
+    L_SEC[i]=0 L_ACTIVE[i]=1 L_SCOPE[i]="" L_NORM[i]=""
+    [[ $line =~ $RE_BLANK ]] && continue
+
+    if [[ $line =~ $RE_COMMENT ]]; then
+      L_KIND[i]=comment
+      # The last comment before a group of patterns is its section heading.
+      t=${line#"${line%%[!#+[:space:]]*}"}
+      t=${t%"${t##*[![:space:]:#]}"}
+      if [[ $t =~ $RE_ALNUM && ! $t =~ $RE_COMMENTED ]]; then
+        pend_title=$t pend_line=$i
+      fi
+      continue
+    fi
+
+    [[ $line =~ $RE_ENTRY ]] || continue
+    key=${BASH_REMATCH[2]} rest=${BASH_REMATCH[4]}
+    L_PRE[i]="${BASH_REMATCH[1]}${key}${BASH_REMATCH[3]}"
+    val=${rest%%#*}
+    post=${rest:${#val}}
+    t=${val%"${val##*[![:space:]]}"}
+    post="${val:${#t}}${post}"
+    val=$t
+    L_KEY[i]=$key L_VAL[i]=$val L_POST[i]=$post
+
+    upper=${key^^} norm=""
+    case $upper in
+      TERM|COLORTERM)         kind=term ;;
+      COLOR|OPTIONS|EIGHTBIT) kind=obsolete ;;
+      .*)                     kind=pattern norm="*$key" ;;
+      \*)                     kind=other ;;
+      \**)                    kind=pattern norm=$key ;;
+      *)
+        if [[ $upper =~ $RE_WORD && -n ${TYPE_CODE[$upper]:-} ]]; then
+          kind=type norm=${TYPE_CODE[$upper]}
+        else
+          kind=unknown
+        fi ;;
+    esac
+    L_KIND[i]=$kind L_NORM[i]=$norm
+
+    if [[ $kind == term ]]; then
+      (( FIRST_TERM_LINE )) || FIRST_TERM_LINE=$i
+      (( prev_term )) || scope=""
+      scope+="${scope:+, }$val"
+      prev_term=1
+      if [[ $state != S ]]; then
+        if [[ $upper == TERM ]]; then subject=$term; else subject=${COLORTERM:-}; fi
+        # The value is a glob pattern, exactly as in dircolors (fnmatch).
+        # shellcheck disable=SC2053
+        if [[ -n $val && $subject == $val ]]; then state=S; else state=N; fi
+      fi
+      L_SCOPE[i]=$scope
+      cur=0 pend_line=0
+      continue
+    fi
+
+    prev_term=0
+    [[ $state == S ]] && state=Y
+    [[ $state == N ]] && L_ACTIVE[i]=0
+    [[ $state != G ]] && L_SCOPE[i]=$scope
+
+    case $kind in
+      pattern)
+        if (( pend_line )); then
+          cur=${#SEC_TITLE[@]}
+          SEC_TITLE[cur]=$pend_title SEC_LINE[cur]=$pend_line
+          section_category "$pend_title"
+          SEC_CAT[cur]=$RET
+          pend_line=0
+        fi
+        L_SEC[i]=$cur
+        [[ -n ${PAT_LINES[$norm]:-} ]] || PAT_ORDER+=("$norm")
+        PAT_LINES[$norm]+=" $i"
+        lower=${norm,,}
+        [[ " ${LPAT[$lower]:-} " == *" $norm "* ]] || LPAT[$lower]+=" $norm"
+        LAST_COLOUR_LINE=$i ;;
+      type)
+        TYPE_LINES[$norm]+=" $i"
+        LAST_COLOUR_LINE=$i
+        cur=0 pend_line=0 ;;
+      *)
+        cur=0 pend_line=0 ;;
+    esac
+  done
+}
+
+# effective LINES -> RET: value of the last active definition, RET2: its line.
+# "Last one wins" is how ls reads LS_COLORS.
+effective() {
+  local i
+  RET="" RET2=0
+  for i in $1; do
+    if (( L_ACTIVE[i] )) && [[ -n ${L_VAL[i]} ]]; then RET=${L_VAL[i]} RET2=$i; fi
+  done
+}
+
+# entry_category PATTERN SECTION -> RET: curated category, else the section's.
+entry_category() {
+  RET=${CUR_CAT[${1,,}]:-}
+  [[ -n $RET ]] || RET=${SEC_CAT[$2]:-}
+}
+
+# ---------------------------------------------------------------------------
+# SGR codes
+# ---------------------------------------------------------------------------
+
+SGR_FG="" SGR_BG="" SGR_ATTRS="" SGR_EXTRA="" SGR_BAD="" SGR_UNKNOWN=""
+SGR_EXT=0 SGR_PAD=1 SGR_ZERO=0
+
+# sgr_parse VALUE: split a colour value into foreground, background,
+# attributes (1 bold, 2 dim, 4 underline, 7 reverse) and the rest.
+sgr_parse() {
+  local v=$1 n tok i a b c
+  local -a t=()
+  SGR_FG="" SGR_BG="" SGR_ATTRS=" " SGR_EXTRA="" SGR_BAD="" SGR_UNKNOWN=""
+  SGR_EXT=0 SGR_PAD=1 SGR_ZERO=0
+  if [[ -z $v || $v == \;* || $v == *\; || $v == *\;\;* ]]; then
+    SGR_BAD=${v:-empty}
+    return
+  fi
+  [[ ";$v;" =~ \;[1-9]\; ]] && SGR_PAD=0
+  IFS=';' read -r -a t <<<"$v"
+  for (( i = 0; i < ${#t[@]}; i++ )); do
+    tok=${t[i]}
+    if [[ ! $tok =~ $RE_NUM ]] || (( ${#tok} > 3 )); then
+      SGR_BAD+="${SGR_BAD:+ }$tok"
+      continue
+    fi
+    n=$(( 10#$tok ))
+    case $n in
+      38|48)
+        a=${t[i+1]:-} b=""
+        if [[ $a == 5 || $a == 05 ]] && [[ ${t[i+2]:-} =~ $RE_NUM ]] && (( 10#${t[i+2]} <= 255 )); then
+          b="$tok;$a;${t[i+2]}"
+          (( i += 2 ))
+        elif [[ $a == 2 || $a == 02 ]]; then
+          b="$tok;$a"
+          for c in 2 3 4; do
+            if [[ ${t[i+c]:-} =~ $RE_NUM ]] && (( 10#${t[i+c]} <= 255 )); then
+              b+=";${t[i+c]}"
+            else
+              b=""
+              break
+            fi
+          done
+          [[ -n $b ]] && (( i += 4 ))
+        fi
+        if [[ -z $b ]]; then
+          SGR_BAD+="${SGR_BAD:+ }$tok"
+        else
+          SGR_EXT=1
+          if (( n == 38 )); then SGR_FG=$b; else SGR_BG=$b; fi
+        fi ;;
+      0) SGR_ZERO=1 ;;
+      1|2|4|7) [[ $SGR_ATTRS == *" $n "* ]] || SGR_ATTRS+="$n " ;;
+      3|5|6|8|9|2[1-9]|39|49) SGR_EXTRA+="${SGR_EXTRA:+;}$tok" ;;
+      3[0-7]|9[0-7]) SGR_FG=$tok ;;
+      4[0-7]|10[0-7]) SGR_BG=$tok ;;
+      *) SGR_UNKNOWN+="${SGR_UNKNOWN:+ }$tok" ;;
+    esac
+  done
+}
+
+# sgr_compose FG BG ATTRS EXTRA PAD ZERO -> RET: a value from its parts.
+sgr_compose() {
+  local fg=$1 bg=$2 attrs=$3 extra=$4 pad=$5 zero=$6 out="" a
+  for a in 1 2 4 7; do
+    if [[ $attrs == *" $a "* ]]; then
+      if (( pad )); then out+="${out:+;}0$a"; else out+="${out:+;}$a"; fi
+    fi
+  done
+  [[ -n $extra ]] && out+="${out:+;}$extra"
+  # Keep a leading "00" when the original value had one and nothing else
+  # would come before the colour.
+  if [[ -z $out ]] && (( zero )) && [[ -n $fg$bg ]]; then
+    if (( pad )); then out="00"; else out="0"; fi
+  fi
+  [[ -n $fg ]] && out+="${out:+;}$fg"
+  [[ -n $bg ]] && out+="${out:+;}$bg"
+  if [[ -z $out ]]; then
+    if (( pad )); then out="00"; else out="0"; fi
+  fi
+  RET=$out
+}
+
+# ---------------------------------------------------------------------------
+# Reading, editing and writing the document
+# ---------------------------------------------------------------------------
+
+# read_file PATH: load the file into SRC/ORIG and parse it.
+read_file() {
+  local -a raw=()
+  if ! mapfile -t raw <"$1"; then
+    err "cannot read $1"
+    return 1
+  fi
+  FILE_EOL=1
+  if [[ -s $1 && -n $(tail -c 1 -- "$1") ]]; then FILE_EOL=0; fi
+  SRC=("" "${raw[@]}")
+  N=${#raw[@]}
+  ORIG=("${SRC[@]}")
+  DEL=() INS=()
+  parse
+}
+
+# set_value LINE VALUE: change the value on one line and nothing else on it.
+set_value() {
+  local i=$1
+  SRC[i]="${L_PRE[i]}$2${L_POST[i]}"
+  L_VAL[i]=$2
+}
+
+# Structural edits are queued, then applied in one pass by doc_rebuild.
+delete_line()  { DEL[$1]=1; }
+insert_after() { INS[$1]+="$2$NL"; }   # line 0 inserts at the top
+
+doc_rebuild() {
+  local i l
+  local -a out=("") extra=()
+  for (( i = 0; i <= N; i++ )); do
+    if (( i > 0 )) && [[ -z ${DEL[i]:-} ]]; then out+=("${SRC[i]}"); fi
+    if [[ -n ${INS[i]:-} ]]; then
+      mapfile -t extra <<<"${INS[i]%"$NL"}"
+      for l in "${extra[@]}"; do out+=("$l"); done
+    fi
+  done
+  SRC=("${out[@]}")
+  N=$(( ${#SRC[@]} - 1 ))
+  DEL=() INS=()
+  parse
+}
+
+# doc_changed: true when SRC differs from the text on disk.
+doc_changed() {
+  local i
+  (( ${#SRC[@]} == ${#ORIG[@]} )) || return 0
+  for (( i = 1; i <= N; i++ )); do
+    [[ ${SRC[i]} == "${ORIG[i]}" ]] || return 0
+  done
+  return 1
+}
+
+doc_print() {
+  local i
+  for (( i = 1; i <= N; i++ )); do
+    if (( i == N && ! FILE_EOL )); then
+      printf '%s' "${SRC[i]}"
+    else
+      printf '%s\n' "${SRC[i]}"
+    fi
+  done
+}
+
+# save_file: back up once per run, then replace the file atomically.
+# Returns 0 written, 1 nothing to write, 2 failed.
+save_file() {
+  local stamp bak dir n=0 i
+  local -a now=()
+  doc_changed || return 1
+  if (( OPT_DRY )); then
+    printf 'Dry run: %s was not changed.\n' "$FILE"
+    return 1
+  fi
+  # Refuse to overwrite edits made by someone else since the file was read.
+  mapfile -t now <"$FILE_REAL" || { err "cannot read $FILE_REAL"; return 2; }
+  if (( ${#now[@]} != ${#ORIG[@]} - 1 )); then n=1; fi
+  for (( i = 0; i < ${#now[@]} && ! n; i++ )); do
+    [[ ${now[i]} == "${ORIG[i+1]}" ]] || n=1
+  done
+  if (( n )); then
+    err "$FILE changed on disk while it was open here. Nothing was written."
+    return 2
+  fi
+  dir=${FILE_REAL%/*}
+  if [[ -z $BACKUP_PATH ]]; then
+    stamp=$(date +%Y%m%d-%H%M%S)
+    bak="$FILE_REAL.bak-$stamp"
+    n=1
+    while [[ -e $bak ]]; do n=$(( n + 1 )); bak="$FILE_REAL.bak-$stamp-$n"; done
+    if ! cp -p -- "$FILE_REAL" "$bak"; then
+      err "could not create the backup $bak. Nothing was written."
+      return 2
+    fi
+    BACKUP_PATH=$bak
+  fi
+  if ! TMP_FILE=$(mktemp "$dir/.lscc.XXXXXX"); then
+    err "could not create a temporary file in $dir. Nothing was written."
+    return 2
+  fi
+  # cp -p first so the temporary file carries the mode of the original.
+  if cp -p -- "$FILE_REAL" "$TMP_FILE" && doc_print >"$TMP_FILE" && mv -f -- "$TMP_FILE" "$FILE_REAL"; then
+    TMP_FILE=""
+    ORIG=("${SRC[@]}")
+    return 0
+  fi
+  rm -f -- "$TMP_FILE"
+  TMP_FILE=""
+  err "writing $FILE_REAL failed. The file is unchanged; backup: $BACKUP_PATH"
+  return 2
+}
+
+# ---------------------------------------------------------------------------
+# Diff between the text on disk (ORIG) and the document (SRC)
+# ---------------------------------------------------------------------------
+
+declare -a DIFF=()   # entries "K a b": K is = - or +, a/b are line numbers
+DIFF_ADDED=0 DIFF_REMOVED=0
+
+make_diff() {
+  local n=$(( ${#ORIG[@]} - 1 )) m=$N s=0 e=0 i j an bn w k x y
+  local -A ids=()
+  local -a ia=() ib=() t=()
+  DIFF=() DIFF_ADDED=0 DIFF_REMOVED=0
+  while (( s < n && s < m )) && [[ ${ORIG[s+1]} == "${SRC[s+1]}" ]]; do (( s++ )); done
+  while (( e < n - s && e < m - s )) && [[ ${ORIG[n-e]} == "${SRC[m-e]}" ]]; do (( e++ )); done
+  an=$(( n - s - e )) bn=$(( m - s - e ))
+  for (( i = 1; i <= s; i++ )); do DIFF+=("= $i $i"); done
+
+  if (( an * bn > 4000000 )); then
+    # Too large for the table: show the middle as replaced wholesale.
+    for (( i = 1; i <= an; i++ )); do DIFF+=("- $(( s + i )) 0"); done
+    for (( j = 1; j <= bn; j++ )); do DIFF+=("+ 0 $(( s + j ))"); done
+  elif (( an > 0 || bn > 0 )); then
+    # Map lines to numbers once, then run a plain LCS on the numbers.
+    k=0
+    for (( i = 0; i < an; i++ )); do
+      x="=${ORIG[s+1+i]}"
+      [[ -n ${ids[$x]:-} ]] || ids[$x]=$(( ++k ))
+      ia[i]=${ids[$x]}
+    done
+    for (( j = 0; j < bn; j++ )); do
+      x="=${SRC[s+1+j]}"
+      [[ -n ${ids[$x]:-} ]] || ids[$x]=$(( ++k ))
+      ib[j]=${ids[$x]}
+    done
+    w=$(( bn + 1 ))
+    for (( j = 0; j <= bn; j++ )); do t[an*w+j]=0; done
+    for (( i = an - 1; i >= 0; i-- )); do
+      t[i*w+bn]=0
+      for (( j = bn - 1; j >= 0; j-- )); do
+        if (( ia[i] == ib[j] )); then
+          t[i*w+j]=$(( t[(i+1)*w+j+1] + 1 ))
+        else
+          x=${t[(i+1)*w+j]} y=${t[i*w+j+1]}
+          t[i*w+j]=$(( x > y ? x : y ))
+        fi
+      done
+    done
+    i=0 j=0
+    while (( i < an || j < bn )); do
+      if (( i < an && j < bn && ia[i] == ib[j] )); then
+        DIFF+=("= $(( s + i + 1 )) $(( s + j + 1 ))")
+        (( i++, j++ ))
+      elif (( j >= bn || ( i < an && t[(i+1)*w+j] >= t[i*w+j+1] ) )); then
+        DIFF+=("- $(( s + i + 1 )) 0")
+        (( i++ ))
+      else
+        DIFF+=("+ 0 $(( s + j + 1 ))")
+        (( j++ ))
+      fi
+    done
+  fi
+  for (( i = 1; i <= e; i++ )); do DIFF+=("= $(( n - e + i )) $(( m - e + i ))"); done
+  for x in "${DIFF[@]}"; do
+    case $x in
+      -*) (( DIFF_REMOVED++ )) ;;
+      +*) (( DIFF_ADDED++ )) ;;
+    esac
+  done
+}
+
+# print_diff: show the pending changes with two lines of context.
+print_diff() {
+  local idx k a b show last=-1 total
+  local -a near=()
+  make_diff
+  total=${#DIFF[@]}
+  if (( DIFF_ADDED == 0 && DIFF_REMOVED == 0 )); then
+    printf 'No changes.\n'
+    return 1
+  fi
+  for (( idx = 0; idx < total; idx++ )); do
+    if [[ ${DIFF[idx]} != =* ]]; then
+      for (( k = idx - 2; k <= idx + 2; k++ )); do
+        (( k >= 0 && k < total )) && near[k]=1
+      done
+    fi
+  done
+  for (( idx = 0; idx < total; idx++ )); do
+    [[ -n ${near[idx]:-} ]] || continue
+    read -r k a b <<<"${DIFF[idx]}"
+    if (( last >= 0 && idx != last + 1 )) || (( last < 0 )); then
+      show=$a
+      (( show )) || show=$b
+      printf '%s@@ line %s @@%s\n' "$C_C" "$show" "$C_0"
+    fi
+    last=$idx
+    case $k in
+      =) printf '  %4s  %s\n' "$a" "${ORIG[a]}" ;;
+      -) printf '%s- %4s  %s%s\n' "$C_R" "$a" "${ORIG[a]}" "$C_0" ;;
+      +) printf '%s+ %4s  %s%s\n' "$C_G" "$b" "${SRC[b]}" "$C_0" ;;
+    esac
+  done
+  printf '%s%d line(s) removed, %d line(s) added.%s\n' "$C_B" "$DIFF_REMOVED" "$DIFF_ADDED" "$C_0"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Config file discovery
+# ---------------------------------------------------------------------------
+
+sample_config() {
+  cat <<'SAMPLE'
+# dircolors configuration: the colours of `ls --color`.
+#
+# Load it from your shell start-up file:
+#   eval "$(dircolors -b ~/.config/dircolors)"
+#
+# Every line is KEY VALUE. A value is a list of codes joined by ";".
+#   attributes: 00 none, 01 bold, 02 dim, 04 underline, 07 reverse
+#   text:       30 black, 31 red, 32 green, 33 yellow,
+#               34 blue, 35 magenta, 36 cyan, 37 white
+#   background: 40 to 47, in the same order as the text colours
+
+# file types
+RESET 0
+DIR 01;34
+LINK 01;36
+ORPHAN 01;31
+MISSING 02;31
+FIFO 33
+SOCK 01;35
+BLK 01;33
+CHR 33
+EXEC 01;32
+SETUID 37;41
+SETGID 30;43
+STICKY 37;44
+OTHER_WRITABLE 34;42
+STICKY_OTHER_WRITABLE 30;42
+MULTIHARDLINK 00
+CAPABILITY 00
+
+# executables
+.exe 01;32
+.bat 01;32
+.cmd 01;32
+.appimage 01;32
+
+# archives
+.tar 31
+.gz 31
+.xz 31
+.zip 31
+.7z 31
+.deb 31
+
+# images
+.jpg 35
+.jpeg 35
+.png 35
+.gif 35
+.svg 35
+.webp 35
+
+# audio
+.mp3 36
+.flac 36
+.ogg 36
+.wav 36
+
+# video
+.mp4 01;35
+.mkv 01;35
+.webm 01;35
+.avi 01;35
+
+# documents
+.pdf 34
+.txt 34
+.md 34
+.odt 34
+.csv 34
+
+# source code
+.c 32
+.h 32
+.py 32
+.js 32
+.sh 32
+.html 32
+
+# config files
+.json 33
+.yml 33
+.toml 33
+.ini 33
+.conf 33
+
+# backup and temporary files
+.bak 02;37
+.tmp 02;37
+.swp 02;37
+*~ 02;37
+SAMPLE
+}
+
+# find_config: set FILE to the first existing default location.
+find_config() {
+  local x=${XDG_CONFIG_HOME:-$HOME/.config} f
+  for f in "$x/dircolors" "$x/.dir_colors" "$HOME/.dir_colors" "$HOME/.dircolors"; do
+    if [[ -f $f ]]; then FILE=$f; return 0; fi
+  done
+  return 1
+}
+
+# offer_sample: no config exists; create one from the built-in sample if the
+# user agrees.
+offer_sample() {
+  local x=${XDG_CONFIG_HOME:-$HOME/.config} target answer
+  target="$x/dircolors"
+  err "no dircolors file found in the usual places:"
+  err "  $x/dircolors, $x/.dir_colors, $HOME/.dir_colors, $HOME/.dircolors"
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    err "Pass a file as argument, or create one with: $PROG sample > $target"
+    exit 1
+  fi
+  printf 'Create %s from the built-in sample? [y/N] ' "$target"
+  read -r answer || answer=""
+  if [[ $answer != [yY]* ]]; then exit 1; fi
+  if ! mkdir -p -- "$x" || ! sample_config >"$target"; then
+    err "could not write $target"
+    exit 1
+  fi
+  printf 'Created %s. To use it, add this line to your shell start-up file:\n' "$target"
+  printf '  eval "$(dircolors -b %s)"\n\n' "$target"
+  FILE=$target
+}
+
+load_config() {
+  if [[ -z $FILE ]]; then
+    find_config || offer_sample
+  fi
+  if [[ -d $FILE ]]; then die "$FILE is a directory"; fi
+  if [[ ! -e $FILE ]]; then die "$FILE does not exist"; fi
+  if [[ ! -r $FILE ]]; then die "$FILE is not readable"; fi
+  resolve_path "$FILE"
+  FILE_REAL=$RET
+  read_file "$FILE_REAL" || exit 1
+}
+
+# ===== commands =====
+
+# ---------------------------------------------------------------------------
+# Command line
+# ---------------------------------------------------------------------------
+
+usage() {
+  cat <<EOF
+$PROG $VERSION - preview, check and edit a dircolors file
+
+Usage: $PROG COMMAND [OPTIONS] [FILE]
+
+Commands:
+  preview   list one sample per entry with the real ls, then run check
+  check     report problems in the file (exit status 1 when there are any)
+  edit      change colours in a full-screen editor
+  fix       walk through the problems found by check and repair them
+  sample    print the built-in sample config
+  help      show this help, or the help of a command: $PROG help edit
+
+FILE defaults to the first that exists of:
+  \$XDG_CONFIG_HOME/dircolors, \$XDG_CONFIG_HOME/.dir_colors,
+  ~/.dir_colors, ~/.dircolors
+
+Options for every command:
+  --256               allow 256-colour codes (38;5;N and 48;5;N)
+  --case-sensitive    treat .deb and .DEB as two separate entries
+  --term NAME         judge TERM lines as if \$TERM were NAME
+  --colour WHEN       colour the output: auto (default), always, never
+  --no-colour         the same as --colour never
+  -h, --help          show help
+  -V, --version       show the version
+
+Every option with "colour" in its name also accepts the spelling "color".
+EOF
+}
+
+main() {
+  local cmd="" arg
+  local -a rest=()
+  while (( $# )); do
+    arg=$1
+    shift
+    case $arg in
+      -h|--help)    rest+=("--help") ;;
+      -V|--version) printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
+      --256)        OPT_256=1 ;;
+      --case-sensitive) OPT_CASE=1 ;;
+      -n|--dry-run) OPT_DRY=1 ;;
+      -k|--keep)    OPT_KEEP=1 ;;
+      -c|--codes)   OPT_CODES=1 ;;
+      --scan)       (( $# )) || die "--scan needs a directory"; OPT_SCAN=$1; shift ;;
+      --scan=*)     OPT_SCAN=${arg#*=} ;;
+      --term)       (( $# )) || die "--term needs a name"; OPT_TERM=$1; shift ;;
+      --term=*)     OPT_TERM=${arg#*=} ;;
+      --ignore)     (( $# )) || die "--ignore needs a list"; OPT_IGNORE=$1; shift ;;
+      --ignore=*)   OPT_IGNORE=${arg#*=} ;;
+      --colour|--color)
+        (( $# )) || die "$arg needs auto, always or never"; OPT_COLOUR=$1; shift ;;
+      --colour=*|--color=*) OPT_COLOUR=${arg#*=} ;;
+      --no-colour|--no-color) OPT_COLOUR=never ;;
+      --)           while (( $# )); do rest+=("$1"); shift; done ;;
+      -?*)          die "unknown option: $arg (try $PROG --help)" ;;
+      *)
+        if [[ -z $cmd ]]; then cmd=$arg; else rest+=("$arg"); fi ;;
+    esac
+  done
+  case $OPT_COLOUR in
+    auto|always|never) ;;
+    *) die "--colour takes auto, always or never" ;;
+  esac
+  setup_colour
+  install_traps
+
+  local want_help=0
+  local -a files=()
+  for arg in "${rest[@]}"; do
+    if [[ $arg == --help ]]; then want_help=1; else files+=("$arg"); fi
+  done
+  if [[ $cmd == help ]]; then
+    want_help=1 cmd=${files[0]:-}
+    files=()
+  fi
+  if (( want_help )); then
+    case $cmd in
+      "") usage ;;
+      *)  usage ;;
+    esac
+    exit 0
+  fi
+  (( ${#files[@]} > 1 )) && die "only one file can be given"
+  FILE=${files[0]:-}
+
+  case $cmd in
+    "")      usage; exit 2 ;;
+    sample)  sample_config ;;
+    *)       die "unknown command: $cmd (try $PROG --help)" ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

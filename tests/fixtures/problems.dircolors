@@ -1,0 +1,41 @@
+# header comment: keep me
+COLOR all
+OPTIONS -F
+EIGHTBIT 1
+
+# file types
+DIR 01;34
+LINK 01;36
+EXEC 01;32
+ORPHAN 05;31
+FIFO 99
+SOCK 1x;31
+
+# archives
+.tar 31
+.TAR 31
+.gz 31
+.GZ 32
+.zip 31   # trailing comment
+.mkv 31
+
+# documents
+.txt 34
+.pdf 34
+.txt 00;34
+.doc 34
+.bak 30
+.hid 08
+
+# audio
+.mp3 36
+.pdf 35
+.wav 38;5;208
+
+	.indented  36  
+
+TERM xterm*
+.term 33
+TERM nomatch-term
+.other 33
+TERM trailing

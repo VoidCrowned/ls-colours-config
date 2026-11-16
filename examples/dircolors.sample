@@ -1,0 +1,91 @@
+# dircolors configuration: the colours of `ls --color`.
+#
+# Load it from your shell start-up file:
+#   eval "$(dircolors -b ~/.config/dircolors)"
+#
+# Every line is KEY VALUE. A value is a list of codes joined by ";".
+#   attributes: 00 none, 01 bold, 02 dim, 04 underline, 07 reverse
+#   text:       30 black, 31 red, 32 green, 33 yellow,
+#               34 blue, 35 magenta, 36 cyan, 37 white
+#   background: 40 to 47, in the same order as the text colours
+
+# file types
+RESET 0
+DIR 01;34
+LINK 01;36
+ORPHAN 01;31
+MISSING 02;31
+FIFO 33
+SOCK 01;35
+BLK 01;33
+CHR 33
+EXEC 01;32
+SETUID 37;41
+SETGID 30;43
+STICKY 37;44
+OTHER_WRITABLE 34;42
+STICKY_OTHER_WRITABLE 30;42
+MULTIHARDLINK 00
+CAPABILITY 00
+
+# executables
+.exe 01;32
+.bat 01;32
+.cmd 01;32
+.appimage 01;32
+
+# archives
+.tar 31
+.gz 31
+.xz 31
+.zip 31
+.7z 31
+.deb 31
+
+# images
+.jpg 35
+.jpeg 35
+.png 35
+.gif 35
+.svg 35
+.webp 35
+
+# audio
+.mp3 36
+.flac 36
+.ogg 36
+.wav 36
+
+# video
+.mp4 01;35
+.mkv 01;35
+.webm 01;35
+.avi 01;35
+
+# documents
+.pdf 34
+.txt 34
+.md 34
+.odt 34
+.csv 34
+
+# source code
+.c 32
+.h 32
+.py 32
+.js 32
+.sh 32
+.html 32
+
+# config files
+.json 33
+.yml 33
+.toml 33
+.ini 33
+.conf 33
+
+# backup and temporary files
+.bak 02;37
+.tmp 02;37
+.swp 02;37
+*~ 02;37
