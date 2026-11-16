@@ -1,0 +1,21 @@
+# A small stand-in for "dircolors --print-database", so the tests do not
+# depend on the installed coreutils version.
+TERM xterm*
+# file types
+DIR 01;34
+LINK 01;36
+SETUID 37;41
+SETGID 30;43
+STICKY 37;44
+# archives or compressed
+.tar 01;31
+.rpm 01;31
+# image formats
+.jpg 01;35
+.xcf 01;35
+# audio formats
+.opus 00;36
+# backup files
+.tmp 00;90
+# misc
+.dbonly 01;33

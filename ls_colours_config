@@ -165,14 +165,18 @@ norm_pattern() {
 
 init_tables() {
   local cat w
+  local -a words=()
   [[ ${#CUR_CAT[@]} -gt 0 ]] && return
   for cat in $CAT_ORDER; do
-    for w in ${CAT_SUGGEST[$cat]}; do
+    # read -a splits without globbing: the lists contain patterns such as *~
+    read -r -a words <<<"${CAT_SUGGEST[$cat]}"
+    for w in "${words[@]}"; do
       norm_pattern "$w"
       CUR_CAT[$RET]=$cat
       CUR_SUGGEST[$RET]=1
     done
-    for w in ${CAT_KNOWN[$cat]}; do
+    read -r -a words <<<"${CAT_KNOWN[$cat]}"
+    for w in "${words[@]}"; do
       norm_pattern "$w"
       CUR_CAT[$RET]=$cat
     done
@@ -898,6 +902,553 @@ load_config() {
   read_file "$FILE_REAL" || exit 1
 }
 
+# ---------------------------------------------------------------------------
+# The system database (dircolors --print-database)
+# ---------------------------------------------------------------------------
+
+declare -A DB_VAL=() DB_CAT=() DB_TYPE=()
+declare -a DB_ORDER=()
+DB_LOADED=0
+
+# load_db: read the database of the installed dircolors. LSCC_DATABASE names
+# a file to read instead (used by the tests).
+load_db() {
+  local line key val t cat="" upper
+  (( DB_LOADED )) && return
+  DB_LOADED=1
+  detect_tools
+  while IFS= read -r line; do
+    if [[ $line =~ $RE_COMMENT ]]; then
+      t=${line#"${line%%[!#+[:space:]]*}"}
+      t=${t%"${t##*[![:space:]:#]}"}
+      if [[ $t =~ $RE_ALNUM && ! $t =~ $RE_COMMENTED ]]; then
+        section_category "$t"
+        cat=$RET
+      fi
+      continue
+    fi
+    [[ $line =~ $RE_ENTRY ]] || continue
+    key=${BASH_REMATCH[2]} val=${BASH_REMATCH[4]}
+    val=${val%%#*}
+    val=${val%"${val##*[![:space:]]}"}
+    [[ -n $val ]] || continue
+    case $key in
+      .*|\*?*)
+        norm_pattern "$key"
+        key=${RET,,}
+        [[ -n ${DB_VAL[$key]:-} ]] || DB_ORDER+=("$key")
+        DB_VAL[$key]=$val DB_CAT[$key]=$cat ;;
+      *)
+        upper=${key^^}
+        if [[ $upper =~ $RE_WORD && -n ${TYPE_CODE[$upper]:-} ]]; then
+          DB_TYPE[${TYPE_CODE[$upper]}]=$val
+        fi ;;
+    esac
+  done < <(if [[ -n ${LSCC_DATABASE:-} ]]; then cat -- "$LSCC_DATABASE"; else "$DC" --print-database 2>/dev/null; fi)
+}
+
+# ---------------------------------------------------------------------------
+# Missing entries
+# ---------------------------------------------------------------------------
+
+declare -A CAT_MAJ=()      # category -> the value most of its entries have
+TWIN_CONVENTION=0          # 1 when the file writes upper-case twins as a rule
+declare -a M_PAT=() M_CAT=() M_SRC=() M_VAL=() M_WHY=()   # missing patterns
+declare -a MT_CODE=() MT_VAL=()                           # missing file types
+declare -A SCAN_COUNT=()   # pattern -> number of files found by --scan
+declare -a SCAN_EXT=()
+
+# compute_majorities: the colour that more than half of the entries of a
+# category have. New entries of that category get the same colour.
+compute_majorities() {
+  local -A count=() total=()
+  local p cat val k lowers=0 twins=0
+  CAT_MAJ=()
+  for p in "${PAT_ORDER[@]}"; do
+    effective "${PAT_LINES[$p]}"
+    (( RET2 )) || continue
+    val=$RET
+    entry_category "$p" "${L_SEC[RET2]}"
+    cat=$RET
+    if [[ -n $cat ]]; then
+      total[$cat]=$(( ${total[$cat]:-0} + 1 ))
+      count[$cat $val]=$(( ${count[$cat $val]:-0} + 1 ))
+    fi
+    if [[ $p == \*.* && $p == "${p,,}" && $p == *[a-z]* ]]; then
+      lowers=$(( lowers + 1 ))
+      [[ -n ${PAT_LINES[${p^^}]:-} ]] && twins=$(( twins + 1 ))
+    fi
+  done
+  for k in "${!count[@]}"; do
+    cat=${k%% *}
+    if (( ${count[$k]} * 2 > ${total[$cat]} )); then CAT_MAJ[$cat]=${k#* }; fi
+  done
+  TWIN_CONVENTION=0
+  if (( twins > 0 && twins * 2 >= lowers )); then TWIN_CONVENTION=1; fi
+}
+
+# scan_walk DIR: count the extensions of the files below DIR.
+scan_walk() {
+  local f name ext
+  for f in "$1"/* "$1"/.[!.]*; do
+    if [[ -L $f ]]; then
+      continue
+    elif [[ -d $f ]]; then
+      case ${f##*/} in
+        .git|node_modules) ;;
+        *) scan_walk "$f" ;;
+      esac
+    elif [[ -f $f ]]; then
+      name=${f##*/}
+      [[ $name == ?*.* ]] || continue
+      ext=".${name##*.}"
+      [[ $ext =~ ^\.[A-Za-z0-9_+-]{1,12}$ ]] || continue
+      ext="*${ext,,}"
+      SCAN_COUNT[$ext]=$(( ${SCAN_COUNT[$ext]:-0} + 1 ))
+    fi
+  done
+}
+
+# scan_dir DIR: SCAN_EXT becomes the extensions below DIR that no pattern of
+# the config matches.
+scan_dir() {
+  local p q suffix covered restore
+  SCAN_COUNT=() SCAN_EXT=()
+  [[ -d $1 ]] || die "--scan: $1 is not a directory"
+  restore=$(shopt -p nullglob)
+  shopt -s nullglob
+  scan_walk "${1%/}"
+  $restore
+  for p in "${!SCAN_COUNT[@]}"; do
+    covered=0
+    for q in "${PAT_ORDER[@]}"; do
+      suffix=${q#\*}
+      if [[ "x${p#\*}" == *"${suffix,,}" ]]; then covered=1; break; fi
+    done
+    (( covered )) || SCAN_EXT+=("$p")
+  done
+  if (( ${#SCAN_EXT[@]} )); then
+    mapfile -t SCAN_EXT < <(printf '%s\n' "${SCAN_EXT[@]}" | LC_ALL=C sort)
+  fi
+}
+
+# find_missing: fill M_* with patterns worth adding and MT_* with file types
+# that are not set. Three sources: the curated table, the system database
+# and, with --scan, the extensions that really occur.
+find_missing() {
+  local -A src=()
+  local -a order=() words=() cand=() from=()
+  local cat w p val why code i
+  M_PAT=() M_CAT=() M_SRC=() M_VAL=() M_WHY=() MT_CODE=() MT_VAL=()
+  load_db
+  compute_majorities
+  for cat in $CAT_ORDER; do
+    read -r -a words <<<"${CAT_SUGGEST[$cat]}"
+    for w in "${words[@]}"; do
+      norm_pattern "$w"
+      cand+=("$RET") from+=(curated)
+    done
+  done
+  for p in "${DB_ORDER[@]}"; do cand+=("$p") from+=(database); done
+  for p in "${SCAN_EXT[@]}"; do cand+=("$p") from+=(scan); done
+  for i in "${!cand[@]}"; do
+    p=${cand[i]}
+    [[ -n ${LPAT[$p]:-} ]] && continue
+    [[ -n ${src[$p]:-} ]] || order+=("$p")
+    src[$p]+="${src[$p]:+, }${from[i]}"
+  done
+  for p in "${order[@]}"; do
+    cat=${CUR_CAT[$p]:-${DB_CAT[$p]:-}}
+    [[ -n $cat ]] || cat=other
+    val="" why="no colour to propose"
+    if [[ -n ${CAT_MAJ[$cat]:-} ]]; then
+      val=${CAT_MAJ[$cat]} why="most of your $cat entries have this colour"
+    elif [[ -n ${DB_VAL[$p]:-} ]]; then
+      val=${DB_VAL[$p]} why="value from the system database"
+    fi
+    M_PAT+=("$p") M_CAT+=("$cat") M_SRC+=("${src[$p]}") M_VAL+=("$val") M_WHY+=("$why")
+  done
+  for code in $TYPES_EXPECTED; do
+    [[ -n ${TYPE_LINES[$code]:-} ]] && continue
+    MT_CODE+=("$code") MT_VAL+=("${DB_TYPE[$code]:-}")
+  done
+}
+
+# pattern_key PATTERN -> RET: the pattern as it is written in a config file.
+pattern_key() {
+  case $1 in
+    \*.*) RET=${1#\*} ;;
+    *)    RET=$1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+
+# add_finding SEVERITY ID LINE WHAT WHY FIX
+add_finding() {
+  [[ ",$OPT_IGNORE," == *",$2,"* ]] && return
+  F_SEV+=("$1") F_ID+=("$2") F_LINE+=("$3") F_WHAT+=("$4") F_WHY+=("$5") F_FIX+=("$6")
+}
+
+# describe_lines LINES -> RET: "line 215 (00;34, documents), line 269 (...)".
+describe_lines() {
+  local i out=""
+  for i in $1; do
+    out+="${out:+, }line $i (${L_VAL[i]:-no value}"
+    if [[ ${L_KIND[i]} == pattern ]]; then out+=", ${SEC_TITLE[${L_SEC[i]}]}"; fi
+    out+=")"
+  done
+  RET=$out
+}
+
+# twin_groups: REDUNDANT_TWINS lists the lines of case twins that repeat the
+# colour of their lower-case entry; TWIN_DIFF lists pairs that disagree.
+declare -a REDUNDANT_TWINS=() TWIN_DIFF=()
+twin_groups() {
+  local p q lower keep keepval same vals i v lines
+  local -a spell=()
+  REDUNDANT_TWINS=() TWIN_DIFF=()
+  for p in "${PAT_ORDER[@]}"; do
+    lower=${p,,}
+    read -r -a spell <<<"${LPAT[$lower]}"
+    (( ${#spell[@]} > 1 )) || continue
+    [[ ${spell[0]} == "$p" ]] || continue          # once per group
+    keep=$p
+    [[ -n ${PAT_LINES[$lower]:-} ]] && keep=$lower
+    effective "${PAT_LINES[$keep]}"
+    keepval=$RET same=1 vals=""
+    for q in "${spell[@]}"; do
+      effective "${PAT_LINES[$q]}"
+      v=$RET
+      pattern_key "$q"
+      vals+="${vals:+, }$RET $v"
+      [[ $v == "$keepval" ]] || same=0
+    done
+    if (( same )); then
+      for q in "${spell[@]}"; do
+        [[ $q == "$keep" ]] && continue
+        for i in ${PAT_LINES[$q]}; do REDUNDANT_TWINS+=("$i"); done
+      done
+    else
+      lines=${PAT_LINES[$keep]# }
+      TWIN_DIFF+=("${lines%% *} $vals")
+    fi
+  done
+}
+
+# flush_mismatch: report a run of lines that the current TERM switches off.
+# Uses the locals first, last, n, scope and term of run_checks.
+flush_mismatch() {
+  local x=$scope
+  (( first )) || return
+  (( ${#x} > 60 )) && x="${x:0:57}..."
+  add_finding warning term-mismatch "$first" \
+    "lines $first to $last ($n colour lines) only apply when TERM matches: $x" \
+    "Your TERM is \"$term\", so ls never sees these lines." \
+    "fix does not change them; check with --term NAME how another terminal fares."
+  first=0
+}
+
+run_checks() {
+  local i kind key val code p lines first last n scope cat sec list why fix sev x total
+  local term=${OPT_TERM:-${TERM:-}}
+  F_SEV=() F_ID=() F_LINE=() F_WHAT=() F_WHY=() F_FIX=()
+
+  # --- line by line -------------------------------------------------------
+  for (( i = 1; i <= N; i++ )); do
+    kind=${L_KIND[i]} key=${L_KEY[i]} val=${L_VAL[i]}
+    case $kind in
+      blank|comment|other) continue ;;
+    esac
+    if [[ -z $val ]]; then
+      add_finding error novalue "$i" "$key has no value" \
+        "dircolors rejects the whole file because of this line, so no colours are set at all." \
+        "fix does not change it; give it a colour or delete the line by hand."
+      continue
+    fi
+    case $kind in
+      obsolete)
+        add_finding info obsolete "$i" "$key is an obsolete keyword" \
+          "dircolors ignores it, so the line does nothing." \
+          "fix offers to remove it."
+        continue ;;
+      unknown)
+        (( L_ACTIVE[i] )) && add_finding error unknown-keyword "$i" "$key is not a dircolors keyword" \
+          "The line has no effect, and some dircolors versions reject the whole file because of it." \
+          "fix does not change it; correct or delete the line by hand."
+        continue ;;
+      term) continue ;;
+    esac
+    # pattern or type from here on
+    [[ $kind == type && " $TYPES_RAW " == *" ${L_NORM[i]} "* ]] && continue
+    [[ $kind == type && ${L_NORM[i]} == ln && $val == target ]] && continue
+    sgr_parse "$val"
+    if [[ -n $SGR_BAD ]]; then
+      add_finding warning bad-sgr "$i" "$key has a malformed colour code: $val" \
+        "ls sends it to the terminal as it is, which shows no colour or garbage." \
+        "fix does not change it; pick a colour in edit."
+      continue
+    fi
+    if [[ -n $SGR_UNKNOWN ]]; then
+      add_finding warning unknown-sgr "$i" "$key uses unknown code(s): $SGR_UNKNOWN (in $val)" \
+        "Terminals ignore codes they do not know, so the entry may show no colour." \
+        "fix does not change it; pick a colour in edit."
+    fi
+    if [[ $SGR_FG == 30 || $SGR_FG == "38;5;0" || $SGR_FG == "38;5;16" ]] \
+      && [[ -z $SGR_BG && $SGR_ATTRS != *" 7 "* ]]; then
+      add_finding warning invisible "$i" "$key is black text without a background ($val)" \
+        "The name is invisible on a dark terminal." \
+        "fix does not change it; pick a colour in edit."
+    fi
+    if [[ ";$SGR_EXTRA;" =~ \;0?8\; ]]; then
+      add_finding warning invisible "$i" "$key uses concealed text ($val)" \
+        "The name is hidden on terminals that support the code." \
+        "fix does not change it; pick a colour in edit."
+    fi
+    if [[ ";$SGR_EXTRA;" =~ \;0?[56]\; ]]; then
+      add_finding info blink "$i" "$key uses blink ($val)" \
+        "Most terminals ignore blink, so the entry shows without it." \
+        "fix does not change it; pick a colour in edit."
+    fi
+    if (( SGR_EXT && ! OPT_256 )); then
+      add_finding warning colour256 "$i" "$key uses a 256-colour or 24-bit code ($val)" \
+        "Terminals limited to 16 colours show it wrong or not at all." \
+        "fix does not change it; pass --256 if your terminal supports these codes."
+    fi
+    # sections that contradict the type of an entry
+    if [[ $kind == pattern ]]; then
+      p=${L_NORM[i]}
+      cat=${CUR_CAT[${p,,}]:-} sec=${SEC_CAT[${L_SEC[i]}]}
+      if [[ -n $cat && -n $sec && $cat != "$sec" ]]; then
+        # report a case pair once, on its lower-case spelling
+        if (( OPT_CASE )) || [[ $p == "${p,,}" || -z ${PAT_LINES[${p,,}]:-} ]]; then
+          add_finding warning wrong-section "$i" \
+            "$key belongs to \"$cat\" but sits in the section \"${SEC_TITLE[${L_SEC[i]}]}\"" \
+            "It is coloured like the wrong group of files, which makes listings misleading." \
+            "fix offers to move it when you let it reorganise the sections."
+        fi
+      fi
+    fi
+  done
+
+  # --- duplicates ---------------------------------------------------------
+  for p in "${PAT_ORDER[@]}" no fi rs di ln or mi pi so bd cd do ex su sg st ow tw ca mh lc rc ec cl; do
+    lines=${PAT_LINES[$p]:-}
+    [[ -n $lines ]] || lines=${TYPE_LINES[$p]:-}
+    [[ $lines == " "*" "* ]] || continue
+    n=0 x="" sev=info sec="" cat=0
+    for i in $lines; do
+      n=$(( n + 1 ))
+      [[ -n $x && ${L_VAL[i]} != "$x" ]] && sev=warning
+      x=${L_VAL[i]}
+      [[ -n $sec && $sec != "${L_SEC[i]}" ]] && cat=1
+      sec=${L_SEC[i]}
+    done
+    first=${lines# }
+    first=${first%% *}
+    effective "$lines"
+    last=$RET2
+    describe_lines "$lines"
+    why="ls uses the last definition, so line $last is in effect"
+    if [[ $sev == warning ]]; then
+      why+=" and the differing values before it are dead."
+    else
+      why+="; the values are the same, so the extra lines are only clutter."
+    fi
+    (( cat )) && why+=" The definitions sit in different sections."
+    add_finding "$sev" duplicate "$first" "${L_KEY[first]} is defined $n times: $RET" "$why" \
+      "fix lets you pick the definition to keep (default: the last) and removes the others."
+  done
+
+  # --- case twins ---------------------------------------------------------
+  if (( ! OPT_CASE )); then
+    twin_groups
+    for x in "${TWIN_DIFF[@]}"; do
+      add_finding warning twin-differs "${x%% *}" "case twins have different colours: ${x#* }" \
+        "That is rarely intended, and other spellings of the extension then get no colour at all." \
+        "fix does not change it; edit shows the pair together so you can align it."
+    done
+    if (( LS_NOCASE && ${#REDUNDANT_TWINS[@]} )); then
+      list=""
+      for i in "${REDUNDANT_TWINS[@]:0:6}"; do list+="${list:+ }${L_KEY[i]}"; done
+      (( ${#REDUNDANT_TWINS[@]} > 6 )) && list+=" ..."
+      add_finding info twins "${REDUNDANT_TWINS[0]}" \
+        "${#REDUNDANT_TWINS[@]} case twins repeat their lower-case entry ($list)" \
+        "This ls matches extensions without regard to case, so the twins are redundant." \
+        "fix offers to remove them."
+    fi
+  fi
+
+  # --- TERM lines ---------------------------------------------------------
+  first=0 last=0 n=0
+  for (( i = LAST_COLOUR_LINE + 1; i <= N; i++ )); do
+    [[ ${L_KIND[i]} == term ]] || continue
+    (( first )) || first=$i
+    last=$i n=$(( n + 1 ))
+  done
+  if (( n )); then
+    x="line $first is a TERM line"
+    (( n > 1 )) && x="lines $first to $last: $n TERM/COLORTERM lines"
+    add_finding info term-noeffect "$first" "$x after the last colour line" \
+      "TERM lines only restrict the colour lines that follow them, and none follow, so they do nothing." \
+      "fix offers to remove them."
+  fi
+  first=0 last=0 n=0 scope=""
+  for (( i = 1; i <= N; i++ )); do
+    case ${L_KIND[i]} in
+      blank|comment|term|other) continue ;;
+    esac
+    if (( L_ACTIVE[i] )); then
+      flush_mismatch
+    else
+      [[ ${L_SCOPE[i]} == "$scope" ]] || flush_mismatch
+      if (( ! first )); then first=$i scope=${L_SCOPE[i]} n=0; fi
+      last=$i n=$(( n + 1 ))
+    fi
+  done
+  flush_mismatch
+
+  # --- missing file types and entries -------------------------------------
+  find_missing
+  if (( ${#MT_CODE[@]} )); then
+    list=""
+    for code in "${MT_CODE[@]}"; do list+="${list:+ }${TYPE_NAME[$code]}"; done
+    add_finding info missing-type 0 "file types that are not set: $list" \
+      "ls falls back to its built-in colours for them, which may not fit the rest of your scheme." \
+      "fix offers to add them with the values of the system database."
+  fi
+  for cat in $CAT_ORDER other; do
+    list="" n=0 total=0
+    for i in "${!M_PAT[@]}"; do
+      [[ ${M_CAT[i]} == "$cat" ]] || continue
+      pattern_key "${M_PAT[i]}"
+      x=${M_SRC[i]}
+      x=${x//curated/c}
+      x=${x//database/d}
+      x=${x//scan/s}
+      x=${x//, /}
+      list+="${list:+ }$RET[$x]"
+      total=$(( total + 1 ))
+      [[ -n ${M_VAL[i]} ]] && n=$(( n + 1 ))
+    done
+    (( total )) || continue
+    if [[ -n ${CAT_MAJ[$cat]:-} ]]; then
+      fix="fix offers to add them as ${CAT_MAJ[$cat]}, the colour most of your $cat entries have."
+    elif (( n == total )); then
+      fix="fix offers to add them with the values of the system database."
+    elif (( n )); then
+      fix="fix offers to add the $n that have a value in the system database; for the others there is no colour to propose."
+    else
+      fix="fix proposes nothing: your $cat entries have no majority colour and the system database has no value."
+    fi
+    add_finding info missing 0 "$total \"$cat\" patterns have no colour: $list" \
+      "Files with these names are listed in the default colour." "$fix"
+  done
+}
+
+# wrap INDENT TEXT [FIRST_PREFIX FIRST_SUFFIX]: print TEXT wrapped to the
+# terminal width. The optional prefix and suffix decorate the first line.
+wrap() {
+  local indent=$1 width=$(( COLS - ${#1} )) line="" word pre=${3:-} post=${4:-}
+  local -a words=()
+  (( width < 30 )) && width=30
+  read -r -a words <<<"$2"
+  for word in "${words[@]}"; do
+    if [[ -n $line ]] && (( ${#line} + 1 + ${#word} > width )); then
+      printf '%s%s%s%s\n' "$pre" "$indent" "$line" "$post"
+      pre="" post="" indent=${indent//?/ }
+      line=$word
+    else
+      line+="${line:+ }$word"
+    fi
+  done
+  [[ -n $line ]] && printf '%s%s%s%s\n' "$pre" "$indent" "$line" "$post"
+}
+
+# print_findings: grouped by severity. Returns 1 when there are findings.
+print_findings() {
+  local sev title colour i n where shown=0 nerr=0 nwarn=0 ninfo=0 legend=0
+  local -a order=()
+  # by line number; findings about the whole file come last
+  mapfile -t order < <(
+    for i in "${!F_SEV[@]}"; do
+      n=${F_LINE[i]}
+      (( n )) || n=9999999
+      printf '%s %s\n' "$n" "$i"
+    done | LC_ALL=C sort -s -n -k1,1
+  )
+  for sev in error warning info; do
+    n=0
+    for i in "${!F_SEV[@]}"; do [[ ${F_SEV[i]} == "$sev" ]] && n=$(( n + 1 )); done
+    (( n )) || continue
+    case $sev in
+      error)   title="Errors" colour=$C_R nerr=$n ;;
+      warning) title="Warnings" colour=$C_Y nwarn=$n ;;
+      *)       title="Notes" colour=$C_C ninfo=$n ;;
+    esac
+    (( shown )) && printf '\n'
+    shown=1
+    printf '%s%s%s (%d)%s\n' "$C_B" "$colour" "$title" "$n" "$C_0"
+    for i in "${order[@]#* }"; do
+      [[ ${F_SEV[i]} == "$sev" ]] || continue
+      where="         "
+      (( F_LINE[i] )) && printf -v where 'line %-4s' "${F_LINE[i]}"
+      [[ ${F_ID[i]} == missing ]] && legend=1
+      wrap "  $where " "${F_WHAT[i]}" "$C_B" "$C_0"
+      wrap "            " "${F_WHY[i]}"
+      wrap "            " "${F_FIX[i]}" "$C_D" "$C_0"
+    done
+  done
+  if (( ! shown )); then
+    printf '%sNo problems found%s in %s\n' "$C_G" "$C_0" "$FILE"
+    return 0
+  fi
+  if (( legend )); then
+    printf '\n%sSources of missing patterns: [c] built-in table, [d] dircolors --print-database, [s] --scan%s\n' "$C_D" "$C_0"
+  fi
+  printf '\n%d error(s), %d warning(s), %d note(s) in %s\n' "$nerr" "$nwarn" "$ninfo" "$FILE"
+  return 1
+}
+
+help_check() {
+  cat <<EOF
+Usage: $PROG check [OPTIONS] [FILE]
+
+Report problems in a dircolors file, grouped by severity. The exit status
+is 0 when nothing was found and 1 otherwise, so it can be used in scripts.
+
+Options:
+  --256              do not report 256-colour and 24-bit codes
+  --case-sensitive   treat .deb and .DEB as two separate entries
+  --scan DIR         also suggest the extensions that occur under DIR and
+                     get no colour
+  --term NAME        judge TERM lines as if \$TERM were NAME
+  --ignore LIST      skip kinds of findings, separated by commas:
+                     novalue unknown-keyword bad-sgr unknown-sgr invisible
+                     blink colour256 obsolete duplicate twin-differs twins
+                     wrong-section term-noeffect term-mismatch missing-type
+                     missing
+EOF
+}
+
+# prepare_checks: everything check, preview and fix need before run_checks.
+prepare_checks() {
+  detect_tools
+  probe_nocase
+  if [[ -n $OPT_SCAN ]]; then scan_dir "$OPT_SCAN"; fi
+}
+
+cmd_check() {
+  load_config
+  term_size
+  [[ -t 1 ]] || COLS=${COLUMNS:-100}
+  prepare_checks
+  run_checks
+  print_findings
+}
+
 # ===== commands =====
 
 # ---------------------------------------------------------------------------
@@ -983,8 +1534,8 @@ main() {
   fi
   if (( want_help )); then
     case $cmd in
-      "") usage ;;
-      *)  usage ;;
+      check) help_check ;;
+      *)     usage ;;
     esac
     exit 0
   fi
@@ -994,6 +1545,7 @@ main() {
   case $cmd in
     "")      usage; exit 2 ;;
     sample)  sample_config ;;
+    check)   cmd_check ;;
     *)       die "unknown command: $cmd (try $PROG --help)" ;;
   esac
 }
