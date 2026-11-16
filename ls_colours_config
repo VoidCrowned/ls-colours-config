@@ -1449,6 +1449,257 @@ cmd_check() {
   print_findings
 }
 
+# ---------------------------------------------------------------------------
+# preview
+# ---------------------------------------------------------------------------
+
+declare -a PV_SKIPPED=()      # samples that could not be created
+declare -a PV_SEC_NAMES=()    # per section: newline-separated sample names
+declare -a PV_SEC_PATS=()     # per section: newline-separated patterns
+declare -A PV_PAINTED=()      # "n:NAME" -> the name as ls printed it
+PV_SOCK="" PV_CHR="" PV_BLK=""
+LS_COLOUR_ARG="--color=never"
+
+# load_ls_colours: set LS_COLORS from the file exactly as a shell would,
+# through "dircolors -b". Returns 1 when dircolors rejects the file.
+load_ls_colours() {
+  local out errors term=${OPT_TERM:-${TERM:-dumb}}
+  errors="$TMP_DIR/.dircolors-errors"
+  if ! out=$(TERM=$term "$DC" -b "$FILE_REAL" 2>"$errors"); then
+    printf '%s%s rejects this file, so a shell gets no colours from it:%s\n' "$C_R" "$DC" "$C_0"
+    while IFS= read -r out; do printf '  %s\n' "$out"; done <"$errors"
+    rm -f -- "$errors"
+    return 1
+  fi
+  rm -f -- "$errors"
+  LS_COLORS=""
+  eval "$out"
+  export LS_COLORS
+  if [[ -z $LS_COLORS ]]; then
+    printf '%sWith TERM=%s this file sets no colours at all.%s\n' "$C_Y" "$term" "$C_0"
+  fi
+  return 0
+}
+
+# make_type_samples: one sample per file type in $TMP_DIR/types. Anything
+# that cannot be created here is skipped and listed afterwards.
+make_type_samples() {
+  local t="$TMP_DIR/types" f restore
+  PV_SKIPPED=() PV_SOCK="" PV_CHR="" PV_BLK=""
+  mkdir -- "$t" || return 1
+  : >"$t/file"
+  mkdir -- "$t/dir" 2>/dev/null || PV_SKIPPED+=(dir)
+  ln -s file "$t/link" 2>/dev/null || PV_SKIPPED+=(link)
+  ln -s nowhere "$t/orphan" 2>/dev/null || PV_SKIPPED+=(orphan)
+  mkfifo -- "$t/fifo" 2>/dev/null || PV_SKIPPED+=(fifo)
+  { : >"$t/executable" && chmod 755 -- "$t/executable"; } 2>/dev/null || PV_SKIPPED+=(executable)
+  : >"$t/setuid"
+  chmod 4644 -- "$t/setuid" 2>/dev/null
+  [[ -u "$t/setuid" ]] || { rm -f -- "$t/setuid"; PV_SKIPPED+=(setuid); }
+  : >"$t/setgid"
+  chmod 2644 -- "$t/setgid" 2>/dev/null
+  [[ -g "$t/setgid" ]] || { rm -f -- "$t/setgid"; PV_SKIPPED+=(setgid); }
+  mkdir -- "$t/other_writable" "$t/sticky" "$t/sticky_other_writable" 2>/dev/null
+  chmod 0777 -- "$t/other_writable" 2>/dev/null || PV_SKIPPED+=(other_writable)
+  chmod 1755 -- "$t/sticky" 2>/dev/null
+  [[ -k "$t/sticky" ]] || { rmdir -- "$t/sticky" 2>/dev/null; PV_SKIPPED+=(sticky); }
+  chmod 1777 -- "$t/sticky_other_writable" 2>/dev/null
+  [[ -k "$t/sticky_other_writable" ]] || {
+    rmdir -- "$t/sticky_other_writable" 2>/dev/null
+    PV_SKIPPED+=(sticky_other_writable)
+  }
+  : >"$t/multihardlink"
+  ln -- "$t/multihardlink" "$t/.multihardlink-twin" 2>/dev/null || {
+    rm -f -- "$t/multihardlink"
+    PV_SKIPPED+=(multihardlink)
+  }
+  # Sockets and device nodes cannot be made here (bash has no bind(), mknod
+  # needs root), so existing ones are borrowed for the listing.
+  restore=$(shopt -p nullglob)
+  shopt -s nullglob
+  for f in /dev/log /run/systemd/notify /run/systemd/journal/socket \
+    /run/dbus/system_bus_socket "${XDG_RUNTIME_DIR:-/nonexistent}/bus" \
+    /var/run/docker.sock /tmp/.X11-unix/X* /run/*.sock /run/*/*.sock /run/*/*; do
+    if [[ -S $f ]]; then PV_SOCK=$f; break; fi
+  done
+  for f in /dev/null /dev/zero /dev/tty; do
+    if [[ -c $f ]]; then PV_CHR=$f; break; fi
+  done
+  for f in /dev/sd? /dev/vd? /dev/nvme?n? /dev/loop? /dev/dm-? /dev/ram? /dev/disk?; do
+    if [[ -b $f ]]; then PV_BLK=$f; break; fi
+  done
+  $restore
+  [[ -n $PV_SOCK ]] || PV_SKIPPED+=(socket)
+  [[ -n $PV_CHR ]] || PV_SKIPPED+=(char_device)
+  [[ -n $PV_BLK ]] || PV_SKIPPED+=(block_device)
+}
+
+# make_pattern_samples: one empty file per pattern, in a directory per section.
+make_pattern_samples() {
+  local p lines first sec dir name n
+  PV_SEC_NAMES=() PV_SEC_PATS=()
+  for p in "${PAT_ORDER[@]}"; do
+    lines=${PAT_LINES[$p]# }
+    first=${lines%% *}
+    sec=${L_SEC[first]}
+    sample_name "$p"
+    name=$RET
+    if [[ -z $name || $name == */* || $name == . || $name == .. ]]; then
+      PV_SKIPPED+=("$p")
+      continue
+    fi
+    dir="$TMP_DIR/s$sec"
+    [[ -d $dir ]] || mkdir -- "$dir" || continue
+    # On a case-insensitive file system .deb and .DEB would collide.
+    n=1
+    while [[ -e "$dir/$name" ]]; do
+      n=$(( n + 1 ))
+      name="$n-${name#[0-9]*-}"
+    done
+    if : 2>/dev/null >"$dir/$name"; then
+      PV_SEC_NAMES[sec]+="$name$NL"
+      PV_SEC_PATS[sec]+="$p$NL"
+    else
+      PV_SKIPPED+=("$p")
+    fi
+  done
+}
+
+# paint_names DIR NAME...: ask ls for the coloured form of each name in DIR
+# and remember it in PV_PAINTED.
+paint_names() {
+  local dir=$1 line
+  shift
+  (( $# )) || return
+  while IFS= read -r line; do
+    line=${line#"$ESC[0m"}
+    strip_sgr "$line"
+    PV_PAINTED[n:$RET]=$line
+  done < <(cd "$dir" && "$LS" -1 -d "$LS_COLOUR_ARG" -- "$@" 2>/dev/null)
+}
+
+# code_row PAINTED PLAIN LABEL CODE: one line of the --codes listing.
+code_row() {
+  local pad=$(( 26 - ${#2} ))
+  (( pad < 1 )) && pad=1
+  printf '  %s%*s %s%-24s %s%s\n' "$1" "$pad" "" "$C_D" "$3" "$4" "$C_0"
+}
+
+preview_types() {
+  local t="$TMP_DIR/types" code name value line
+  local -a extra=()
+  printf '\n%sfile types%s\n' "$C_B" "$C_0"
+  [[ -n $PV_CHR ]] && extra+=("$PV_CHR")
+  [[ -n $PV_BLK ]] && extra+=("$PV_BLK")
+  [[ -n $PV_SOCK ]] && extra+=("$PV_SOCK")
+  if (( OPT_CODES )); then
+    PV_PAINTED=()
+    paint_names "$t" file dir link orphan fifo executable setuid setgid sticky \
+      other_writable sticky_other_writable multihardlink "${extra[@]}"
+    for code in fi di ln or pi so bd cd ex su sg st ow tw mh; do
+      case $code in
+        fi) name=file ;;
+        ln) name=link ;;
+        or) name=orphan ;;
+        pi) name=fifo ;;
+        so) name=$PV_SOCK ;;
+        bd) name=$PV_BLK ;;
+        cd) name=$PV_CHR ;;
+        *)  name=${TYPE_SAMPLE[$code]} ;;
+      esac
+      [[ -n $name && -n ${PV_PAINTED[n:$name]:-} ]] || continue
+      effective "${TYPE_LINES[$code]:-}"
+      value=${RET:-(not set, ls default)}
+      code_row "${PV_PAINTED[n:$name]}" "$name" "${TYPE_NAME[$code]}" "$value"
+    done
+  else
+    (cd "$t" && "$LS" -C -w "$COLS" "$LS_COLOUR_ARG")
+    if (( ${#extra[@]} )); then
+      "$LS" -d -C -w "$COLS" "$LS_COLOUR_ARG" -- "${extra[@]}" 2>/dev/null
+    fi
+  fi
+  if [[ -L "$t/orphan" ]]; then
+    effective "${TYPE_LINES[mi]:-}"
+    printf '%s  the target of a broken link (MISSING %s):%s\n' "$C_D" "${RET:-not set}" "$C_0"
+    # A fixed time stamp marks where the name starts in the long listing.
+    line=$(cd "$t" && "$LS" -l --time-style=+LSCC "$LS_COLOUR_ARG" orphan 2>/dev/null)
+    printf '  %s\n' "${line#* LSCC }"
+  fi
+}
+
+preview_sections() {
+  local sec dir name p i
+  local -a names=() pats=()
+  for sec in "${!SEC_TITLE[@]}"; do
+    [[ -n ${PV_SEC_NAMES[sec]:-} ]] || continue
+    dir="$TMP_DIR/s$sec"
+    printf '\n%s%s%s\n' "$C_B" "${SEC_TITLE[sec]}" "$C_0"
+    if (( OPT_CODES )); then
+      mapfile -t names <<<"${PV_SEC_NAMES[sec]%"$NL"}"
+      mapfile -t pats <<<"${PV_SEC_PATS[sec]%"$NL"}"
+      PV_PAINTED=()
+      paint_names "$dir" "${names[@]}"
+      for i in "${!names[@]}"; do
+        name=${names[i]} p=${pats[i]}
+        effective "${PAT_LINES[$p]}"
+        code_row "${PV_PAINTED[n:$name]:-$name}" "$name" "$p" "${RET:-(no active definition)}"
+      done
+    else
+      (cd "$dir" && "$LS" -C -w "$COLS" "$LS_COLOUR_ARG")
+    fi
+  done
+}
+
+help_preview() {
+  cat <<EOF
+Usage: $PROG preview [OPTIONS] [FILE]
+
+Create a temporary directory with one sample per entry of the file and list
+it with the real ls, with the colours loaded through "dircolors -b" the way
+a shell does it. The output is grouped by the section comments of the file
+and followed by the findings of check.
+
+Options:
+  -c, --codes        one entry per line, with its pattern and colour code
+  -k, --keep         keep the sample directory and print its path
+  --256, --case-sensitive, --scan DIR, --term NAME, --ignore LIST
+                     as for check
+  --colour WHEN      auto (default) colours only on a terminal; use
+                     "always" to keep the colours in a pipe
+EOF
+}
+
+cmd_preview() {
+  local version
+  load_config
+  term_size
+  [[ -t 1 ]] || COLS=${COLUMNS:-80}
+  prepare_checks
+  (( USE_COLOUR )) && LS_COLOUR_ARG="--color=always"
+  TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/lscc-preview.XXXXXX") || exit 1
+  version=$("$LS" --version 2>/dev/null | head -n 1)
+  printf '%sfile:%s %s   %sTERM:%s %s   %sls:%s %s\n' "$C_B" "$C_0" "$FILE" \
+    "$C_B" "$C_0" "${OPT_TERM:-${TERM:-}}" "$C_B" "$C_0" "$version"
+  if ! load_ls_colours; then
+    printf '\n'
+    run_checks
+    print_findings
+    exit 1
+  fi
+  make_type_samples
+  make_pattern_samples
+  preview_types
+  preview_sections
+  if (( ${#PV_SKIPPED[@]} )); then
+    printf '\n%sNot shown, because no sample could be created or found: %s%s\n' \
+      "$C_D" "${PV_SKIPPED[*]}" "$C_0"
+  fi
+  printf '\n%sFindings of check%s\n' "$C_B" "$C_0"
+  run_checks
+  print_findings
+  return 0
+}
+
 # ===== commands =====
 
 # ---------------------------------------------------------------------------
@@ -1535,6 +1786,7 @@ main() {
   if (( want_help )); then
     case $cmd in
       check) help_check ;;
+      preview) help_preview ;;
       *)     usage ;;
     esac
     exit 0
@@ -1546,6 +1798,7 @@ main() {
     "")      usage; exit 2 ;;
     sample)  sample_config ;;
     check)   cmd_check ;;
+    preview) cmd_preview ;;
     *)       die "unknown command: $cmd (try $PROG --help)" ;;
   esac
 }
