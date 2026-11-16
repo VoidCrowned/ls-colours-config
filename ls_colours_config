@@ -2484,6 +2484,42 @@ tui_start() {
   stty -echo 2>/dev/null </dev/tty
   TUI_ACTIVE=1
   printf '%s' "${ESC}[?1049h${ESC}[?25l"
+  screen_reset
+}
+
+# Frames are built as text in which ROW_AT, a row number and ROW_TXT start
+# each screen row. emit_frame compares every row with what is on screen
+# (FRAME) and sends only the rows that changed, so an unchanged screen costs
+# nothing and the terminal never shows a half-drawn frame.
+ROW_AT=$'\001'
+ROW_TXT=$'\002'
+declare -a FRAME=()
+
+# screen_reset: forget what is on screen and clear it; the next frame is
+# drawn in full.
+screen_reset() {
+  FRAME=()
+  printf '%s' "${ESC}[0m${ESC}[2J"
+}
+
+emit_frame() {
+  local out="" seg y text
+  local -a segs=()
+  IFS=$ROW_AT read -r -d '' -a segs <<<"$1"
+  for seg in "${segs[@]}"; do
+    [[ $seg == *"$ROW_TXT"* ]] || continue
+    y=${seg%%"$ROW_TXT"*}
+    text=${seg#*"$ROW_TXT"}
+    text=${text%"$NL"}
+    # a row that was never drawn compares unequal even to an empty one
+    if [[ ${FRAME[y]-$ROW_AT} != "$text" ]]; then
+      out+="${ESC}[${y};1H${text}${ESC}[0m${ESC}[K"
+      FRAME[y]=$text
+    fi
+  done
+  # 2026 is "synchronised output": terminals that know it show the update
+  # in one go, the others ignore the request
+  [[ -n $out ]] && printf '%s' "${ESC}[?2026h${out}${ESC}[?2026l"
 }
 
 tui_suspend() {
@@ -2533,6 +2569,7 @@ read_key() {
 # Returns 1 when cancelled with Esc.
 line_input() {
   local text=$2
+  unset "FRAME[$(( ROWS - 1 ))]"
   while :; do
     printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K${C_B}$1${C_0}${text}${ESC}[?25h"
     read_key 0.5 || continue
@@ -2655,7 +2692,7 @@ title_bar() {
   (( ${#text} + ${#mode} > COLS )) && text=${text:0:$(( COLS - ${#mode} > 0 ? COLS - ${#mode} : 0 ))}
   pad=$(( COLS - ${#text} - ${#mode} ))
   (( pad < 0 )) && pad=0
-  printf -v RET '%s[1;1H%s[7m%s%*s%s%s[0m' "$ESC" "$ESC" "$text" "$pad" "" "${mode:0:COLS}" "$ESC"
+  printf -v RET '%s1%s%s[7m%s%*s%s%s[0m' "$ROW_AT" "$ROW_TXT" "$ESC" "$text" "$pad" "" "${mode:0:COLS}" "$ESC"
 }
 
 draw_list() {
@@ -2671,7 +2708,7 @@ draw_list() {
   buf=$RET
   for (( r = 0; r < height; r++ )); do
     idx=$(( T_TOP + r )) y=$(( r + 2 ))
-    buf+="${ESC}[${y};1H${ESC}[K"
+    buf+="${ROW_AT}${y}${ROW_TXT}"
     (( idx < ${#ROW_KIND[@]} )) || continue
     kind=${ROW_KIND[idx]} ref=${ROW_REF[idx]}
     [[ $kind == b ]] && continue
@@ -2699,15 +2736,15 @@ draw_list() {
       buf+=" $line"
     fi
   done
-  buf+="${ESC}[$(( ROWS - 1 ));1H${ESC}[K"
+  buf+="${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}"
   if [[ -n $T_MSG ]]; then
     buf+="${T_MSG:0:COLS}"
   elif [[ -n $T_FILTER ]]; then
     buf+="${C_D}filter:${C_0} $T_FILTER  ${C_D}(Esc clears)${C_0}"
   fi
   line=" up/down or j/k move   Enter edit   / search   c case pairs   u undo   s save   ? help   q quit"
-  buf+="${ESC}[${ROWS};1H${ESC}[K${C_D}${line:0:COLS}${C_0}"
-  printf '%s' "$buf"
+  buf+="${ROW_AT}${ROWS}${ROW_TXT}${C_D}${line:0:COLS}${C_0}"
+  emit_frame "$buf"
 }
 
 # --- the colour picker -------------------------------------------------------
@@ -2870,7 +2907,7 @@ draw_grid() {
       line+=$RET
       (( r == 0 )) && line+=" "
     done
-    buf+="${ESC}[${y};1H${ESC}[K$line"
+    buf+="${ROW_AT}${y}${ROW_TXT}$line"
     y=$(( y + 1 ))
   done
   RET=$buf RET2=$y
@@ -2882,13 +2919,13 @@ draw_picker() {
   buf=$RET
   picker_value
   value=$RET
-  buf+="${ESC}[2;1H${ESC}[K"
-  buf+="${ESC}[${y};1H${ESC}[K  ${C_B}${E_LABEL[ref]}${C_0}  ${C_D}(${E_SEC[ref]})${C_0}"
+  buf+="${ROW_AT}2${ROW_TXT}"
+  buf+="${ROW_AT}${y}${ROW_TXT}  ${C_B}${E_LABEL[ref]}${C_0}  ${C_D}(${E_SEC[ref]})${C_0}"
   y=$(( y + 1 ))
   paint "$value" "${E_NAME[ref]}"
-  buf+="${ESC}[${y};1H${ESC}[K  $RET    ${C_D}code${C_0} $value    ${C_D}was${C_0} $old"
+  buf+="${ROW_AT}${y}${ROW_TXT}  $RET    ${C_D}code${C_0} $value    ${C_D}was${C_0} $old"
   y=$(( y + 1 ))
-  buf+="${ESC}[${y};1H${ESC}[K"
+  buf+="${ROW_AT}${y}${ROW_TXT}"
   if [[ $old == *"|"* ]]; then
     buf+="  ${C_Y}The spellings of this entry have different colours; accepting sets all of them.${C_0}"
   fi
@@ -2902,16 +2939,16 @@ draw_picker() {
       title="Background: $RET"
     fi
     if (( PK_FIELD == f )); then title="${C_B}> $title${C_0}"; else title="  $title"; fi
-    buf+="${ESC}[${y};1H${ESC}[K$title"
+    buf+="${ROW_AT}${y}${ROW_TXT}$title"
     y=$(( y + 1 ))
     draw_grid "$f" "$y"
     buf+=$RET
     y=$RET2
-    buf+="${ESC}[${y};1H${ESC}[K"
+    buf+="${ROW_AT}${y}${ROW_TXT}"
     y=$(( y + 1 ))
   done
   if (( PK_FIELD == 2 )); then title="${C_B}> Attributes${C_0}"; else title="  Attributes"; fi
-  buf+="${ESC}[${y};1H${ESC}[K$title"
+  buf+="${ROW_AT}${y}${ROW_TXT}$title"
   y=$(( y + 1 ))
   line="    "
   for i in 0 1 2 3 4; do
@@ -2923,17 +2960,17 @@ draw_picker() {
       line+="$box ${names[i]}   "
     fi
   done
-  buf+="${ESC}[${y};1H${ESC}[K$line"
+  buf+="${ROW_AT}${y}${ROW_TXT}$line"
   y=$(( y + 1 ))
   if [[ -n $PK_EXTRA ]]; then
-    buf+="${ESC}[${y};1H${ESC}[K    ${C_D}other codes kept: $PK_EXTRA${C_0}"
+    buf+="${ROW_AT}${y}${ROW_TXT}    ${C_D}other codes kept: $PK_EXTRA${C_0}"
     y=$(( y + 1 ))
   fi
-  for (( ; y < ROWS - 1; y++ )); do buf+="${ESC}[${y};1H${ESC}[K"; done
-  buf+="${ESC}[$(( ROWS - 1 ));1H${ESC}[K${T_MSG:0:COLS}"
+  for (( ; y < ROWS - 1; y++ )); do buf+="${ROW_AT}${y}${ROW_TXT}"; done
+  buf+="${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}${T_MSG:0:COLS}"
   line=" arrows or h/j/k/l choose   Tab next field   Space toggle   e type a code   r reset   Enter accept   Esc cancel"
-  buf+="${ESC}[${ROWS};1H${ESC}[K${C_D}${line:0:COLS}${C_0}"
-  printf '%s' "$buf"
+  buf+="${ROW_AT}${ROWS}${ROW_TXT}${C_D}${line:0:COLS}${C_0}"
+  emit_frame "$buf"
 }
 
 # picker_load VALUE: set the picker to show VALUE.
@@ -2952,7 +2989,7 @@ picker_load() {
 
 # open_picker ENTRY: edit one entry. Stages the result on Enter.
 open_picker() {
-  local ref=$1 old start v i record="" codes=(1 2 4 7 5) a
+  local ref=$1 old start v i record="" codes=(1 2 4 7 5) a dirty=1
   entry_values "$ref"
   start=$EV_EFF
   old=$start
@@ -2961,12 +2998,15 @@ open_picker() {
   picker_load "$start"
   PK_FIELD=0 PK_AT=0 T_MSG=""
   while :; do
-    draw_picker "$ref" "$old"
-    T_MSG=""
+    if (( dirty )); then
+      draw_picker "$ref" "$old"
+      T_MSG="" dirty=0
+    fi
     if ! read_key 0.25; then
-      if (( RESIZED )); then RESIZED=0; term_size; fi
+      if (( RESIZED )); then RESIZED=0; term_size; screen_reset; dirty=1; fi
       continue
     fi
+    dirty=1
     case $KEY in
       up|k)    picker_move -1 0 ;;
       down|j)  picker_move 1 0 ;;
@@ -3069,15 +3109,15 @@ show_help() {
     "A backup is made next to the file before the first write."
   )
   title_bar
-  buf="$RET${ESC}[2;1H${ESC}[K"
+  buf="$RET${ROW_AT}2${ROW_TXT}"
   for line in "${help_lines[@]}"; do
     (( y < ROWS - 1 )) || break
-    buf+="${ESC}[${y};1H${ESC}[K  ${line:0:$(( COLS - 2 ))}"
+    buf+="${ROW_AT}${y}${ROW_TXT}  ${line:0:$(( COLS - 2 ))}"
     y=$(( y + 1 ))
   done
-  for (( ; y < ROWS; y++ )); do buf+="${ESC}[${y};1H${ESC}[K"; done
-  buf+="${ESC}[${ROWS};1H${ESC}[K${C_D} press any key to go back${C_0}"
-  printf '%s' "$buf"
+  for (( ; y < ROWS; y++ )); do buf+="${ROW_AT}${y}${ROW_TXT}"; done
+  buf+="${ROW_AT}${ROWS}${ROW_TXT}${C_D} press any key to go back${C_0}"
+  emit_frame "$buf"
   while ! read_key 0.5; do :; done
 }
 
@@ -3124,7 +3164,7 @@ cmd_edit() {
   draw_list
   while :; do
     if ! read_key 0.25; then
-      if (( RESIZED )); then RESIZED=0; term_size; draw_list; fi
+      if (( RESIZED )); then RESIZED=0; term_size; screen_reset; draw_list; fi
       continue
     fi
     T_MSG=""
@@ -3159,13 +3199,14 @@ cmd_edit() {
       q|eof)
         if (( ${#ST[@]} )) && [[ $KEY == q ]]; then
           printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K${C_Y}${#ST[@]} unsaved changes. Quit without saving? [y/N]${C_0} "
+          unset "FRAME[$(( ROWS - 1 ))]"
           while ! read_key 0.5; do :; done
           [[ $KEY == y || $KEY == Y ]] && break
         else
           break
         fi ;;
     esac
-    (( RESIZED )) && { RESIZED=0; term_size; }
+    (( RESIZED )) && { RESIZED=0; term_size; screen_reset; }
     draw_list
   done
   return 0
