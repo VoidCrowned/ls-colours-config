@@ -106,7 +106,7 @@ has "$OUT" "No problems found" "clean file is reported as clean"
 run check --term xterm "$FIX/novalue.dircolors"
 has "$OUT" "Errors (1)" "errors come first"
 run check --color=always --term xterm "$FIX/novalue.dircolors"
-has "$OUT" "$ESC[" "--color is accepted as a spelling of --colour"
+has "$OUT" "${ESC}[" "--color is accepted as a spelling of --colour"
 run check "$WORK/does-not-exist"
 is "$RC" 2 "missing file is a usage error"
 run check --help

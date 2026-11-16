@@ -41,6 +41,10 @@ has() { if [[ $1 == *"$2"* ]]; then pass "$3"; else fail "$3" "[$2] not found in
 hasnt() { if [[ $1 != *"$2"* ]]; then pass "$3"; else fail "$3" "[$2] unexpectedly found"; fi; }
 # run ARGS...: run the script as a program; sets OUT (stdout+stderr) and RC
 run() { OUT=$("$BASH" "$SCRIPT" "$@" 2>&1); RC=$?; }
+# ok NAME COMMAND...: pass when the command succeeds
+ok() { local name=$1; shift; if "$@"; then pass "$name"; else fail "$name"; fi; }
+# count PATH...: RET = how many of the paths exist (pass a glob)
+count() { local f; RET=0; for f in "$@"; do if [[ -e $f || -L $f ]]; then RET=$(( RET + 1 )); fi; done; }
 # fresh NAME: copy a fixture into the work directory, sets F
 fresh() { F="$WORK/$1.$RANDOM"; cp "$FIX/$1" "$F"; }
 

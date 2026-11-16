@@ -82,26 +82,31 @@ RE_ALNUM='[[:alnum:]]'
 
 # dircolors keywords for file types and the two-letter codes ls uses for them.
 declare -A TYPE_CODE=(
-  [NORMAL]=no [NORM]=no [FILE]=fi [RESET]=rs [DIR]=di [LNK]=ln [LINK]=ln
+  [NORMAL]=no [NORM]=no [FILE]="fi" [RESET]=rs [DIR]=di [LNK]=ln [LINK]=ln
   [SYMLINK]=ln [ORPHAN]=or [MISSING]=mi [FIFO]=pi [PIPE]=pi [SOCK]=so
-  [BLK]=bd [BLOCK]=bd [CHR]=cd [CHAR]=cd [DOOR]=do [EXEC]=ex [LEFT]=lc
+  [BLK]=bd [BLOCK]=bd [CHR]=cd [CHAR]=cd [DOOR]="do" [EXEC]=ex [LEFT]=lc
   [LEFTCODE]=lc [RIGHT]=rc [RIGHTCODE]=rc [END]=ec [ENDCODE]=ec [SUID]=su
   [SETUID]=su [SGID]=sg [SETGID]=sg [STICKY]=st [OTHER_WRITABLE]=ow [OWR]=ow
   [STICKY_OTHER_WRITABLE]=tw [OWT]=tw [CAPABILITY]=ca [MULTIHARDLINK]=mh
   [CLRTOEOL]=cl
 )
 declare -A TYPE_NAME=(
-  [no]=NORMAL [fi]=FILE [rs]=RESET [di]=DIR [ln]=LINK [or]=ORPHAN [mi]=MISSING
-  [pi]=FIFO [so]=SOCK [bd]=BLK [cd]=CHR [do]=DOOR [ex]=EXEC [su]=SETUID
+  [no]=NORMAL ["fi"]=FILE [rs]=RESET [di]=DIR [ln]=LINK [or]=ORPHAN [mi]=MISSING
+  [pi]=FIFO [so]=SOCK [bd]=BLK [cd]=CHR ["do"]=DOOR [ex]=EXEC [su]=SETUID
   [sg]=SETGID [st]=STICKY [ow]=OTHER_WRITABLE [tw]=STICKY_OTHER_WRITABLE
   [ca]=CAPABILITY [mh]=MULTIHARDLINK [lc]=LEFT [rc]=RIGHT [ec]=END [cl]=CLRTOEOL
 )
 declare -A TYPE_SAMPLE=(
-  [no]=text [fi]=file [rs]=reset [di]=dir [ln]=link [or]=orphan [mi]=missing
-  [pi]=fifo [so]=socket [bd]=block_device [cd]=char_device [do]=door
+  [no]=text ["fi"]=file [rs]=reset [di]=dir [ln]=link [or]=orphan [mi]=missing
+  [pi]=fifo [so]=socket [bd]=block_device [cd]=char_device ["do"]=door
   [ex]=executable [su]=setuid [sg]=setgid [st]=sticky [ow]=other_writable
   [tw]=sticky_other_writable [ca]=capability [mh]=multihardlink
 )
+# Every code, in the order ls documents them. A string rather than a literal
+# list in the loops, because "fi" and "do" are shell keywords.
+TYPE_CODES="no fi rs di ln or mi pi so bd cd do ex su sg st ow tw ca mh lc rc ec cl"
+# The file types preview lists, in display order.
+TYPES_SHOWN="fi di ln or pi so bd cd ex su sg st ow tw mh"
 # File types a config is expected to set; anything missing is reported.
 TYPES_EXPECTED="di ln or mi pi so bd cd ex su sg st ow tw"
 # Keys whose value is not an SGR colour code.
@@ -1233,7 +1238,7 @@ run_checks() {
   done
 
   # --- duplicates ---------------------------------------------------------
-  for p in "${PAT_ORDER[@]}" no fi rs di ln or mi pi so bd cd do ex su sg st ow tw ca mh lc rc ec cl; do
+  for p in "${PAT_ORDER[@]}" $TYPE_CODES; do
     lines=${PAT_LINES[$p]:-}
     [[ -n $lines ]] || lines=${TYPE_LINES[$p]:-}
     [[ $lines == " "*" "* ]] || continue
@@ -1328,7 +1333,7 @@ run_checks() {
       x=${x//database/d}
       x=${x//scan/s}
       x=${x//, /}
-      list+="${list:+ }$RET[$x]"
+      list+="${list:+ }${RET}[$x]"
       total=$(( total + 1 ))
       [[ -n ${M_VAL[i]} ]] && n=$(( n + 1 ))
     done
@@ -1575,7 +1580,7 @@ paint_names() {
   shift
   (( $# )) || return
   while IFS= read -r line; do
-    line=${line#"$ESC[0m"}
+    line=${line#"${ESC}[0m"}
     strip_sgr "$line"
     PV_PAINTED[n:$RET]=$line
   done < <(cd "$dir" && "$LS" -1 -d "$LS_COLOUR_ARG" -- "$@" 2>/dev/null)
@@ -1599,10 +1604,10 @@ preview_types() {
     PV_PAINTED=()
     paint_names "$t" file dir link orphan fifo executable setuid setgid sticky \
       other_writable sticky_other_writable multihardlink "${extra[@]}"
-    for code in fi di ln or pi so bd cd ex su sg st ow tw mh; do
+    for code in $TYPES_SHOWN; do
       case $code in
-        fi) name=file ;;
-        ln) name=link ;;
+        fi) name="file" ;;
+        ln) name="link" ;;
         or) name=orphan ;;
         pi) name=fifo ;;
         so) name=$PV_SOCK ;;
@@ -1774,7 +1779,7 @@ fix_duplicates() {
   for p in "${PAT_ORDER[@]}"; do
     [[ ${PAT_LINES[$p]} == " "*" "* ]] && keys+=("$p")
   done
-  for p in no fi rs di ln or mi pi so bd cd do ex su sg st ow tw ca mh lc rc ec cl; do
+  for p in $TYPE_CODES; do
     [[ ${TYPE_LINES[$p]:-} == " "*" "* ]] && keys+=("$p")
   done
   step 1 "duplicates"
@@ -2005,9 +2010,9 @@ fix_missing() {
         if [[ -n ${M_VAL[i]} ]]; then
           n=$(( n + 1 ))
           paint "${M_VAL[i]}" "$RET"
-          line+="$RET$C_D[$tag]$C_0 "
+          line+="$RET${C_D}[$tag]$C_0 "
         else
-          none+="$RET[$tag] "
+          none+="${RET}[$tag] "
         fi
       done
       [[ -n $line$none ]] || continue
@@ -2151,16 +2156,16 @@ build_reorganised() {
       if [[ ${L_KIND[i]} == pattern && ${L_SEC[i]} == "$s" ]]; then b=$i; break; fi
     done
     for (( i = a; i <= b; i++ )); do
-      drop[$i]=1
+      drop[i]=1
       [[ ${L_KIND[i]} == comment ]] && hdr[$s]+="${SRC[i]}$NL"
     done
   done
   for (( i = 1; i <= N; i++ )); do
-    if [[ ${L_KIND[i]} == pattern && -z ${L_SCOPE[i]} ]]; then drop[$i]=1; fi
-    if [[ ${L_KIND[i]} == blank && -n ${drop[$(( i - 1 ))]:-} ]]; then drop[$i]=1; fi
-    if (( ! first )) && [[ -n ${drop[$i]:-} ]]; then first=$i; fi
+    if [[ ${L_KIND[i]} == pattern && -z ${L_SCOPE[i]} ]]; then drop[i]=1; fi
+    if [[ ${L_KIND[i]} == blank && -n ${drop[i-1]:-} ]]; then drop[i]=1; fi
+    if (( ! first )) && [[ -n ${drop[i]:-} ]]; then first=$i; fi
   done
-  for (( i = first; i <= N; i++ )); do [[ -z ${drop[$i]:-} ]] && rest=1; done
+  for (( i = first; i <= N; i++ )); do [[ -z ${drop[i]:-} ]] && rest=1; done
 
   # sort: by section, then by pattern without regard to case, lower case
   # first, original order last. A pattern that extends another one of the
@@ -2188,11 +2193,11 @@ build_reorganised() {
         fi
         k=${key##*"$TAB"}
         doc+=("${SRC[k]}")
-        newpos[$k]=${#doc[@]}
+        newpos[k]=${#doc[@]}
       done
       (( rest )) && doc+=("")
     fi
-    [[ -n ${drop[$i]:-} ]] || doc+=("${SRC[i]}")
+    [[ -n ${drop[i]:-} ]] || doc+=("${SRC[i]}")
   done
   REORG=("${doc[@]}")
 
@@ -2210,7 +2215,7 @@ build_reorganised() {
       effective "${PAT_LINES[$q]}"
       b=$RET2 vb=$RET
       (( a && b )) || continue
-      [[ -n ${newpos[$a]:-} && -n ${newpos[$b]:-} && $va != "$vb" ]] || continue
+      [[ -n ${newpos[a]:-} && -n ${newpos[b]:-} && $va != "$vb" ]] || continue
       if (( (a > b) != (newpos[a] > newpos[b]) )); then
         sample_name "$p"
         if (( a > b )); then
@@ -2351,7 +2356,7 @@ cmd_fix() {
 # Entries of the list. A case pair (.deb / .DEB) is one entry unless
 # --case-sensitive is on; an entry knows every line that defines it.
 declare -a E_LABEL=() E_NAME=() E_LINES=() E_SEC=()
-declare -a ROW_KIND=() ROW_REF=()    # visible rows: h = heading, e = entry
+declare -a ROW_KIND=() ROW_REF=()    # visible rows: h heading, e entry, b blank
 declare -a ST=()                     # staged values by line number
 declare -a UNDO=()                   # one record per change
 declare -a EV_LIST=()                # distinct values of the entry at hand
@@ -2487,13 +2492,15 @@ build_rows() {
     fi
     if [[ ${E_SEC[i]} != "$sec" || ${#ROW_KIND[@]} -eq 0 ]]; then
       sec=${E_SEC[i]}
+      # a blank row sets each section apart from the one above
+      if (( ${#ROW_KIND[@]} )); then ROW_KIND+=(b) ROW_REF+=(""); fi
       ROW_KIND+=(h) ROW_REF+=("$sec")
     fi
     ROW_KIND+=(e) ROW_REF+=("$i")
   done
   (( T_CUR >= ${#ROW_KIND[@]} )) && T_CUR=$(( ${#ROW_KIND[@]} - 1 ))
   (( T_CUR < 0 )) && T_CUR=0
-  [[ ${ROW_KIND[T_CUR]:-} == h ]] && move_cursor 1
+  [[ ${ROW_KIND[T_CUR]:-} == e ]] || move_cursor 1
 }
 
 # entry_values INDEX: EV_LIST = the distinct values of the entry right now,
@@ -2516,12 +2523,12 @@ move_cursor() {
   (( n < 0 )) && step=-1 n=$(( -n ))
   while (( n > 0 )); do
     j=$(( i + step ))
-    while (( j >= 0 && j < total )) && [[ ${ROW_KIND[j]} == h ]]; do j=$(( j + step )); done
+    while (( j >= 0 && j < total )) && [[ ${ROW_KIND[j]} != e ]]; do j=$(( j + step )); done
     (( j < 0 || j >= total )) && break
     i=$j n=$(( n - 1 ))
   done
-  # the cursor never rests on a heading
-  if [[ ${ROW_KIND[i]} == h ]]; then
+  # the cursor never rests on a heading or a blank row
+  if [[ ${ROW_KIND[i]} != e ]]; then
     for (( j = i + 1; j < total; j++ )); do
       if [[ ${ROW_KIND[j]} == e ]]; then i=$j; break; fi
     done
@@ -2557,6 +2564,7 @@ draw_list() {
     buf+="${ESC}[${y};1H${ESC}[K"
     (( idx < ${#ROW_KIND[@]} )) || continue
     kind=${ROW_KIND[idx]} ref=${ROW_REF[idx]}
+    [[ $kind == b ]] && continue
     if [[ $kind == h ]]; then
       buf+="${C_B}${C_C}${ref:0:$(( COLS - 1 ))}${C_0}"
       continue

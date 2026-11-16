@@ -49,19 +49,19 @@ fresh problems.dircolors
 before=$(cat "$F")
 FILE=$F; FILE_REAL=$F; BACKUP_PATH=""; read_file "$F"
 save_file; is "$?" 1 "no write when nothing changed"
-is "$(ls "$WORK" | grep -c "bak-")" 0 "no backup when nothing changed"
+count "$WORK"/*bak-*; is "$RET" 0 "no backup when nothing changed"
 set_value 19 "01;31"
 set_value 35 "35"
 save_file; is "$?" 0 "save succeeds"
 is "$(sed -n 19p "$F")" ".zip 01;31   # trailing comment" "value replaced, trailing comment kept"
 is "$(sed -n 35p "$F")" "${TAB}.indented  35  " "value replaced, whitespace kept"
 is "$(sed -e 19d -e 35d "$F")" "$(printf '%s\n' "$before" | sed -e 19d -e 35d)" "all other lines are byte-identical"
-[[ -f $BACKUP_PATH ]] && pass "backup created" || fail "backup created"
+ok "backup created" test -f "$BACKUP_PATH"
 is "$(cat "$BACKUP_PATH")" "$before" "backup holds the old content"
 first_backup=$BACKUP_PATH
 set_value 15 "32"; save_file
 is "$BACKUP_PATH" "$first_backup" "one backup per run"
-is "$(ls -A "$WORK" | grep -c '^\.lscc\.')" 0 "no temp file left behind"
+count "$WORK"/.lscc.*; is "$RET" 0 "no temp file left behind"
 
 fresh problems.dircolors
 FILE=$F; FILE_REAL=$F; BACKUP_PATH=""; read_file "$F"
@@ -84,7 +84,7 @@ is "$(od -c "$FILE" | tail -n 2 | head -n 1 | grep -c '\\n$')" 0 "missing final 
 ln -s "$WORK/noeol" "$WORK/link"
 FILE="$WORK/link"; resolve_path "$FILE"; FILE_REAL=$RET; BACKUP_PATH=""; read_file "$FILE_REAL"
 set_value 2 "34"; save_file
-[[ -L "$WORK/link" ]] && pass "a symlinked config stays a symlink" || fail "a symlinked config stays a symlink"
+ok "a symlinked config stays a symlink" test -L "$WORK/link"
 is "$(cat "$WORK/noeol")" ".a 33${NL}.b 34" "the link target was written"
 
 group "sample config"

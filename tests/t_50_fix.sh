@@ -48,7 +48,7 @@ fixrun '\na\ny\ny\ny\na\ny\ny\n' --dry-run "$F"
 is "$(cat "$F")" "$before" "--dry-run leaves the file alone"
 has "$OUT" "Dry run: nothing was written" "--dry-run says so"
 has "$OUT" "line(s) removed" "--dry-run still shows the diff"
-is "$(ls "$WORK" | grep -c "${F##*/}.bak-")" 0 "--dry-run makes no backup"
+count "$F".bak-*; is "$RET" 0 "--dry-run makes no backup"
 fixrun '\na\ny\ny\ny\na\ny\nn\n' "$F"
 is "$(cat "$F")" "$before" "answering n at the end writes nothing"
 OUT=$("$BASH" "$SCRIPT" fix --term xterm "$F" </dev/null 2>&1)

@@ -12,12 +12,12 @@ has "$OUT" "${NL}archives${NL}" "output is grouped by the section comments"
 has "$OUT" "example.tar" "one sample per pattern"
 has "$OUT" "Findings of check" "findings follow the listing"
 hasnt "$OUT" "$ESC" "no escape codes when piped"
-is "$(ls -A "$WORK/tmp" | wc -l)" 0 "the sample directory is removed"
+count "$WORK"/tmp/* "$WORK"/tmp/.[!.]*; is "$RET" 0 "the sample directory is removed"
 
 TMPDIR="$WORK/tmp" run preview --keep --term xterm "$ROOT/examples/dircolors.sample"
 has "$OUT" "samples kept in $WORK/tmp/lscc-preview." "--keep prints the path"
 kept=$(printf '%s\n' "$WORK"/tmp/lscc-preview.*)
-[[ -e "$kept/s2/example.tar" ]] && pass "--keep keeps the samples" || fail "--keep keeps the samples"
+ok "--keep keeps the samples" test -e "$kept/s2/example.tar"
 chmod -R u+rwx "$kept"; rm -rf "$kept"
 
 run preview --codes --term xterm "$ROOT/examples/dircolors.sample"

@@ -27,13 +27,13 @@ has "$OUT" "no dircolors file found" "...with an explanation"
 has "$OUT" "sample >" "...and how to create one"
 cp "$ROOT/examples/dircolors.sample" "$home/.dircolors"
 OUT=$(HOME=$home XDG_CONFIG_HOME="" "$BASH" "$SCRIPT" check --term xterm --ignore missing </dev/null 2>&1)
-has "$OUT" "$home/.dircolors" "finds ~/.dircolors"
+has "$OUT" "$home/.dircolors" "finds .dircolors in the home directory"
 cp "$FIX/pairs.dircolors" "$home/.dir_colors"
 OUT=$(HOME=$home XDG_CONFIG_HOME="" "$BASH" "$SCRIPT" check --term xterm --ignore missing </dev/null 2>&1)
-has "$OUT" "$home/.dir_colors" "~/.dir_colors comes before ~/.dircolors"
+has "$OUT" "$home/.dir_colors" "the home .dir_colors comes before .dircolors"
 cp "$FIX/pairs.dircolors" "$home/.config/dircolors"
 OUT=$(HOME=$home XDG_CONFIG_HOME="" "$BASH" "$SCRIPT" check --term xterm --ignore missing </dev/null 2>&1)
-has "$OUT" "$home/.config/dircolors" "~/.config/dircolors is the default XDG location and comes first"
+has "$OUT" "$home/.config/dircolors" "the .config directory is the default XDG location and comes first"
 cp "$FIX/pairs.dircolors" "$home/xdg/.dir_colors"
 OUT=$(HOME=$home XDG_CONFIG_HOME="$home/xdg" "$BASH" "$SCRIPT" check --term xterm --ignore missing </dev/null 2>&1)
 has "$OUT" "$home/xdg/.dir_colors" "\$XDG_CONFIG_HOME is honoured"

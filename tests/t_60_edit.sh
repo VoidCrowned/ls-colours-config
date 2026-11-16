@@ -16,6 +16,9 @@ OPT_CASE=0; build_entries
 T_FILTER="png"; T_CUR=0; build_rows
 is "${#ROW_KIND[@]}" 2 "search filters the list (heading plus one entry)"
 T_FILTER=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeebhee" "a blank row separates the sections"
+T_CUR=3; move_cursor 1
+is "$T_CUR" 6 "the cursor skips the blank row and the heading"
 
 group "edit: colour picker"
 picker_load "00;33"
@@ -55,7 +58,7 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   tui "$F" -- '\r' 'll' '\r' 's' 'y\n' '\n' 'q'
   is "$(sed -n 2,3p "$F")" ".tar 33${NL}.TAR 33" "a case pair is edited together and saved"
   is "$(sed -e 2,3d "$F")" "$(printf '%s\n' "$before" | sed -e 2,3d)" "the other lines are untouched"
-  is "$(ls "$WORK" | grep -c "${F##*/}.bak-")" 1 "a backup is written"
+  count "$F".bak-*; is "$RET" 1 "a backup is written"
   has "$OUT" "${ESC}[?1049l" "the alternate screen is left on exit"
   has "$OUT" "${ESC}[?25h" "the cursor is shown again on exit"
 
