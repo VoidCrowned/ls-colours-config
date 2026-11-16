@@ -34,10 +34,15 @@ is "${#FG_CELLS[@]}" 257 "--256 offers the whole palette"
 is "${FG_CELLS[PK_FG]}" "38;5;208" "...with the current colour selected"
 picker_move 1 0; picker_value; is "$RET" "38;5;244" "moving down in the palette changes row"
 OPT_256=0
-picker_load "01;05;31;44"
-PK_FIELD=2 PK_AT=0
+picker_load "01;03;31;44"
 PK_ATTRS=${PK_ATTRS/" 1 "/ }
-picker_value; is "$RET" "05;31;44" "codes the picker has no control for (blink) are kept"
+picker_value; is "$RET" "03;31;44" "codes the picker has no control for (italic) are kept"
+picker_load "01;05;31"
+is "$PK_ATTRS" " 1 5 " "blink is one of the attributes"
+PK_ATTRS=${PK_ATTRS/" 5 "/ }
+picker_value; is "$RET" "01;31" "blink can be switched off"
+picker_load "31"; PK_ATTRS+="5 "
+picker_value; is "$RET" "05;31" "...and on"
 
 group "edit: in a terminal"
 run edit "$FIX/pairs.dircolors" </dev/null

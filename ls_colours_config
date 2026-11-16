@@ -462,7 +462,7 @@ SGR_FG="" SGR_BG="" SGR_ATTRS="" SGR_EXTRA="" SGR_BAD="" SGR_UNKNOWN=""
 SGR_EXT=0 SGR_PAD=1 SGR_ZERO=0
 
 # sgr_parse VALUE: split a colour value into foreground, background,
-# attributes (1 bold, 2 dim, 4 underline, 7 reverse) and the rest.
+# attributes (1 bold, 2 dim, 4 underline, 5 blink, 7 reverse) and the rest.
 sgr_parse() {
   local v=$1 n tok i a b c
   local -a toks=()
@@ -506,8 +506,8 @@ sgr_parse() {
           if (( n == 38 )); then SGR_FG=$b; else SGR_BG=$b; fi
         fi ;;
       0) SGR_ZERO=1 ;;
-      1|2|4|7) [[ $SGR_ATTRS == *" $n "* ]] || SGR_ATTRS+="$n " ;;
-      3|5|6|8|9|2[1-9]|39|49) SGR_EXTRA+="${SGR_EXTRA:+;}$tok" ;;
+      1|2|4|5|7) [[ $SGR_ATTRS == *" $n "* ]] || SGR_ATTRS+="$n " ;;
+      3|6|8|9|2[1-9]|39|49) SGR_EXTRA+="${SGR_EXTRA:+;}$tok" ;;
       3[0-7]|9[0-7]) SGR_FG=$tok ;;
       4[0-7]|10[0-7]) SGR_BG=$tok ;;
       *) SGR_UNKNOWN+="${SGR_UNKNOWN:+ }$tok" ;;
@@ -518,7 +518,7 @@ sgr_parse() {
 # sgr_compose FG BG ATTRS EXTRA PAD ZERO -> RET: a value from its parts.
 sgr_compose() {
   local fg=$1 bg=$2 attrs=$3 extra=$4 pad=$5 zero=$6 out="" a
-  for a in 1 2 4 7; do
+  for a in 1 2 4 5 7; do
     if [[ $attrs == *" $a "* ]]; then
       if (( pad )); then out+="${out:+;}0$a"; else out+="${out:+;}$a"; fi
     fi
@@ -955,6 +955,8 @@ load_db() {
 # ---------------------------------------------------------------------------
 
 declare -A CAT_MAJ=()      # category -> the value most of its entries have
+declare -A CAT_MAJ_N=() CAT_TOTAL=()   # how many entries have it, out of how many
+declare -a O_PAT=() O_LINE=() O_VAL=() O_CAT=()   # entries that stand out
 TWIN_CONVENTION=0          # 1 when the file writes upper-case twins as a rule
 declare -a M_PAT=() M_CAT=() M_SRC=() M_VAL=() M_WHY=()   # missing patterns
 declare -a MT_CODE=() MT_VAL=()                           # missing file types
@@ -964,9 +966,9 @@ declare -a SCAN_EXT=()
 # compute_majorities: the colour that more than half of the entries of a
 # category have. New entries of that category get the same colour.
 compute_majorities() {
-  local -A tally=() sum=()
+  local -A tally=() sum=() spelt=()
   local p cat val k lowers=0 twins=0
-  CAT_MAJ=()
+  CAT_MAJ=() CAT_MAJ_N=() CAT_TOTAL=()
   for p in "${PAT_ORDER[@]}"; do
     effective "${PAT_LINES[$p]}"
     (( RET2 )) || continue
@@ -974,8 +976,12 @@ compute_majorities() {
     entry_category "$p" "${L_SEC[RET2]}"
     cat=$RET
     if [[ -n $cat ]]; then
+      # 00;34 and 34 are the same colour: count them together, and keep
+      # the spelling that came first as the one to propose
+      plain_colour "$val"
       sum[$cat]=$(( ${sum[$cat]:-0} + 1 ))
-      tally[$cat $val]=$(( ${tally[$cat $val]:-0} + 1 ))
+      tally[$cat $RET]=$(( ${tally[$cat $RET]:-0} + 1 ))
+      [[ -n ${spelt[$cat $RET]:-} ]] || spelt[$cat $RET]=$val
     fi
     if [[ $p == \*.* && $p == "${p,,}" && $p == *[a-z]* ]]; then
       lowers=$(( lowers + 1 ))
@@ -984,10 +990,49 @@ compute_majorities() {
   done
   for k in "${!tally[@]}"; do
     cat=${k%% *}
-    if (( ${tally[$k]} * 2 > ${sum[$cat]} )); then CAT_MAJ[$cat]=${k#* }; fi
+    if (( ${tally[$k]} * 2 > ${sum[$cat]} )); then
+      CAT_MAJ[$cat]=${spelt[$k]} CAT_MAJ_N[$cat]=${tally[$k]} CAT_TOTAL[$cat]=${sum[$cat]}
+    fi
   done
   TWIN_CONVENTION=0
   if (( twins > 0 && twins * 2 >= lowers )); then TWIN_CONVENTION=1; fi
+}
+
+# plain_colour VALUE -> RET: VALUE without a leading reset, so that 00;34
+# and 34 compare as the same colour.
+plain_colour() {
+  RET=$1
+  RET=${RET#00;}
+  RET=${RET#0;}
+}
+
+# find_outliers: entries whose colour differs from the colour that nearly
+# all entries of their category have (at least 80 % of at least 5).
+# Needs compute_majorities to have run.
+find_outliers() {
+  local p lower cat val line maj
+  O_PAT=() O_LINE=() O_VAL=() O_CAT=()
+  for p in "${PAT_ORDER[@]}"; do
+    effective "${PAT_LINES[$p]}"
+    (( RET2 )) || continue
+    val=$RET line=$RET2
+    entry_category "$p" "${L_SEC[line]}"
+    cat=$RET
+    [[ -n $cat && -n ${CAT_MAJ[$cat]:-} ]] || continue
+    (( ${CAT_TOTAL[$cat]} >= 5 && ${CAT_MAJ_N[$cat]} * 100 >= ${CAT_TOTAL[$cat]} * 80 )) || continue
+    plain_colour "${CAT_MAJ[$cat]}"
+    maj=$RET
+    plain_colour "$val"
+    [[ $RET == "$maj" ]] && continue
+    # a case pair is reported once, on its lower-case spelling
+    lower=${p,,}
+    if (( ! OPT_CASE )) && [[ $p != "$lower" && -n ${PAT_LINES[$lower]:-} ]]; then
+      effective "${PAT_LINES[$lower]}"
+      plain_colour "$RET"
+      [[ $RET == "$maj" ]] || continue
+    fi
+    O_PAT+=("$p") O_LINE+=("$line") O_VAL+=("$val") O_CAT+=("$cat")
+  done
 }
 
 # scan_walk DIR: count the extensions of the files below DIR.
@@ -1211,7 +1256,7 @@ run_checks() {
         "The name is hidden on terminals that support the code." \
         "fix does not change it; pick a colour in edit."
     fi
-    if [[ ";$SGR_EXTRA;" =~ \;0?[56]\; ]]; then
+    if [[ $SGR_ATTRS == *" 5 "* || ";$SGR_EXTRA;" =~ \;0?6\; ]]; then
       add_finding info blink "$i" "$key uses blink ($val)" \
         "Most terminals ignore blink, so the entry shows without it." \
         "fix does not change it; pick a colour in edit."
@@ -1316,6 +1361,15 @@ run_checks() {
 
   # --- missing file types and entries -------------------------------------
   find_missing
+  find_outliers
+  for i in "${!O_PAT[@]}"; do
+    cat=${O_CAT[i]}
+    pattern_key "${O_PAT[i]}"
+    add_finding info outlier "${O_LINE[i]}" \
+      "$RET is ${O_VAL[i]}, but ${CAT_MAJ_N[$cat]} of your ${CAT_TOTAL[$cat]} \"$cat\" entries are ${CAT_MAJ[$cat]}" \
+      "It stands out in listings; that can be on purpose, but it is often a leftover." \
+      "fix offers to change it to ${CAT_MAJ[$cat]}."
+  done
   if (( ${#MT_CODE[@]} )); then
     list=""
     for code in "${MT_CODE[@]}"; do list+="${list:+ }${TYPE_NAME[$code]}"; done
@@ -1436,8 +1490,8 @@ Options:
   --ignore LIST      skip kinds of findings, separated by commas:
                      novalue unknown-keyword bad-sgr unknown-sgr invisible
                      blink colour256 obsolete duplicate twin-differs twins
-                     wrong-section term-noeffect term-mismatch missing-type
-                     missing
+                     wrong-section outlier term-noeffect term-mismatch
+                     missing-type missing
 EOF
 }
 
@@ -1740,7 +1794,7 @@ confirm() {
   [[ $REPLY == [yY] || $REPLY == [yY][eE][sS] ]]
 }
 
-step() { printf '\n%sStep %s of 4: %s%s\n' "$C_B" "$1" "$2" "$C_0"; }
+step() { printf '\n%sStep %s of 5: %s%s\n' "$C_B" "$1" "$2" "$C_0"; }
 
 # refresh: apply queued edits and bring the findings up to date.
 refresh() {
@@ -1905,7 +1959,59 @@ fix_cleanup() {
   refresh
 }
 
-# --- step 3: missing entries -------------------------------------------------
+# --- step 3: colours that stand out -----------------------------------------
+
+# recolour INDEX: give outlier INDEX the colour of its category, on every
+# line that defines it (and on its case twins, unless they are separate).
+recolour() {
+  local p=${O_PAT[$1]} maj=${CAT_MAJ[${O_CAT[$1]}]} q i
+  local -a spell=()
+  if (( OPT_CASE )); then spell=("$p"); else read -r -a spell <<<"${LPAT[${p,,}]}"; fi
+  for q in "${spell[@]}"; do
+    for i in ${PAT_LINES[$q]}; do
+      [[ -n ${L_VAL[i]} ]] && set_value "$i" "$maj"
+    done
+  done
+}
+
+fix_outliers() {
+  local i cat key old new n=0
+  step 3 "colours that stand out"
+  if (( ! ${#O_PAT[@]} )); then
+    printf '  No entry stands out from its category.\n'
+    return
+  fi
+  printf '  These entries differ from the colour nearly all entries of their category have:\n'
+  for i in "${!O_PAT[@]}"; do
+    cat=${O_CAT[i]}
+    pattern_key "${O_PAT[i]}"
+    key=$RET
+    sample_name "${O_PAT[i]}"
+    paint "${O_VAL[i]}" "$RET"
+    old=$RET
+    sample_name "${O_PAT[i]}"
+    paint "${CAT_MAJ[$cat]}" "$RET"
+    new=$RET
+    printf '    line %-4s %-10s %-9s %s  ->  %-9s %s  %s(%s of %s %s entries)%s\n' "${O_LINE[i]}" "$key" \
+      "${O_VAL[i]}" "$old" "${CAT_MAJ[$cat]}" "$new" "$C_D" "${CAT_MAJ_N[$cat]}" "${CAT_TOTAL[$cat]}" "$cat" "$C_0"
+  done
+  ask "  Change them? [a = all, e = choose per entry, Enter = none]"
+  case $REPLY in
+    a|A)
+      for i in "${!O_PAT[@]}"; do recolour "$i"; n=$(( n + 1 )); done ;;
+    e|E)
+      for i in "${!O_PAT[@]}"; do
+        pattern_key "${O_PAT[i]}"
+        ask "    $RET: ${O_VAL[i]} -> ${CAT_MAJ[${O_CAT[i]}]}? [y/N, q = stop asking]"
+        if [[ $REPLY == [qQ] ]] || (( ASK_EOF )); then break; fi
+        if [[ $REPLY == [yY] ]]; then recolour "$i"; n=$(( n + 1 )); fi
+      done ;;
+  esac
+  (( n )) && printf '  %d entries recoloured.\n' "$n"
+  refresh
+}
+
+# --- step 4: missing entries -------------------------------------------------
 
 # add_missing_types: queue the file type lines the user accepted.
 add_missing_types() {
@@ -1987,7 +2093,7 @@ queue_missing() {
 fix_missing() {
   local -a chosen=() cats=()
   local cat i n none line tag stop=0
-  step 3 "missing entries"
+  step 4 "missing entries"
   style_detect
   if (( ! ${#MT_CODE[@]} && ! ${#M_PAT[@]} )); then
     printf '  Nothing is missing.\n'
@@ -2069,7 +2175,7 @@ fix_missing() {
   refresh
 }
 
-# --- step 4: reorganise ------------------------------------------------------
+# --- step 5: reorganise ------------------------------------------------------
 
 # reorg_keys: one sort key per movable pattern line: section rank, the
 # pattern it extends (or itself), pattern, spelling, line number.
@@ -2231,7 +2337,7 @@ build_reorganised() {
 
 fix_reorganise() {
   local i same=1 x
-  step 4 "reorganise the sections"
+  step 5 "reorganise the sections"
   if ! build_reorganised; then
     printf '  There are no pattern lines to reorganise.\n'
     return
@@ -2316,10 +2422,13 @@ and nothing is written until you have seen the complete diff and confirmed.
                       one, which is what ls uses already)
   2. dead lines       obsolete keywords, TERM lines without effect and,
                       where ls ignores case, redundant upper-case twins
-  3. missing entries  add common patterns in the colour most entries of
+  3. odd colours      entries that differ from the colour nearly all
+                      entries of their category have; change all, some
+                      or none
+  4. missing entries  add common patterns in the colour most entries of
                       their category have; accept all, per category or
                       per entry
-  4. reorganise       group patterns by category and sort the sections
+  5. reorganise       group patterns by category and sort the sections
 
 Before writing, a backup named FILE.bak-DATE-TIME is created next to the
 file.
@@ -2343,6 +2452,7 @@ cmd_fix() {
   printf '\n'
   fix_duplicates
   fix_cleanup
+  fix_outliers
   fix_missing
   fix_reorganise
   review_and_save
@@ -2698,7 +2808,7 @@ picker_move() {
   if (( PK_FIELD == 2 )); then
     PK_AT=$(( PK_AT + dx ))
     (( PK_AT < 0 )) && PK_AT=0
-    (( PK_AT > 3 )) && PK_AT=3
+    (( PK_AT > 4 )) && PK_AT=4
     (( dy < 0 )) && PK_FIELD=1
     return
   fi
@@ -2759,7 +2869,7 @@ draw_grid() {
 }
 
 draw_picker() {
-  local ref=$1 old=$2 buf y=3 value f title names=(bold dim underline reverse) codes=(1 2 4 7) i box line
+  local ref=$1 old=$2 buf y=3 value f title names=(bold dim underline reverse blink) codes=(1 2 4 7 5) i box line
   title_bar
   buf=$RET
   picker_value
@@ -2796,7 +2906,7 @@ draw_picker() {
   buf+="${ESC}[${y};1H${ESC}[K$title"
   y=$(( y + 1 ))
   line="    "
-  for i in 0 1 2 3; do
+  for i in 0 1 2 3 4; do
     box="[ ]"
     [[ $PK_ATTRS == *" ${codes[i]} "* ]] && box="[x]"
     if (( PK_FIELD == 2 && PK_AT == i )); then
@@ -2834,7 +2944,7 @@ picker_load() {
 
 # open_picker ENTRY: edit one entry. Stages the result on Enter.
 open_picker() {
-  local ref=$1 old start v i record="" codes=(1 2 4 7) a
+  local ref=$1 old start v i record="" codes=(1 2 4 7 5) a
   entry_values "$ref"
   start=$EV_EFF
   old=$start
@@ -2969,7 +3079,8 @@ Usage: $PROG edit [OPTIONS] [FILE]
 
 Change the colours of existing entries in a full-screen editor. Every entry
 is shown with a sample name in its current colour. Colours are picked from a
-palette; nobody has to type a code.
+palette and bold, dim, underline, reverse and blink are switched on and off;
+nobody has to type a code.
 
 Options:
   --256              offer the 256-colour palette in the picker

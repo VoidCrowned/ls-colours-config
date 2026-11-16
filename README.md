@@ -39,6 +39,7 @@ A linter. It exits with 0 when the file is clean and 1 when it found something, 
 - the obsolete keywords `COLOR`, `OPTIONS` and `EIGHTBIT`
 - `TERM` lines that restrict nothing, and colour lines that the current `TERM` switches off
 - entries in a section that contradicts them (a video extension under "audio"), and case twins with different colours
+- entries whose colour differs from the one at least 80 % of their category have
 - file types that are not set and common patterns without a colour
 
 `--ignore LIST` skips kinds of findings; `ls_colours_config help check` lists the names.
@@ -49,14 +50,15 @@ Walks through those findings and repairs them. Every step asks first:
 
 1. **Duplicates:** pick the definition to keep. Enter keeps the last one, which is the one `ls` uses already.
 2. **Lines that do nothing:** obsolete keywords, dead `TERM` lines, redundant case twins.
-3. **Missing entries:** new entries get the colour that most entries of the same category have in your file; if there is no majority, the value from `dircolors --print-database`. Accept all, per category or per entry. Each suggestion says where it comes from: the built-in table, the system database, or `--scan DIR` (extensions that occur under `DIR` and get no colour).
-4. **Reorganise:** group the patterns by category and sort each section, case twins next to each other. This is the only step that moves lines.
+3. **Colours that stand out:** entries that differ from the colour nearly all entries of their category have (one red document among blue ones). Change all, some or none.
+4. **Missing entries:** new entries get the colour that most entries of the same category have in your file; if there is no majority, the value from `dircolors --print-database`. Accept all, per category or per entry. Each suggestion says where it comes from: the built-in table, the system database, or `--scan DIR` (extensions that occur under `DIR` and get no colour).
+5. **Reorganise:** group the patterns by category and sort each section, case twins next to each other. This is the only step that moves lines.
 
 Then it shows the complete diff and asks once before writing.
 
 ### `edit`
 
-A full-screen editor for the colours of existing entries. Each row shows a sample name in its current colour. Enter opens a picker for foreground, background and bold, dim, underline, reverse with a live preview; typing a code by hand is possible (`e`) but never needed.
+A full-screen editor for the colours of existing entries. Each row shows a sample name in its current colour. Enter opens a picker for foreground, background and bold, dim, underline, reverse and blink with a live preview; typing a code by hand is possible (`e`) but never needed.
 
 Keys: arrows or `h` `j` `k` `l`, Enter, `/` search, `c` join or separate case pairs, `u` undo, `s` save, `q` quit, `?` help.
 

@@ -36,6 +36,9 @@ expect colour256 33 "256-colour code while 256 mode is off"
 expect term-mismatch 40 "colour line behind a TERM that does not match"
 expect term-noeffect 41 "TERM line after the last colour line"
 expect missing-type 0 "file types that are not set"
+OPT_CASE=1; run_checks
+expect outlier 18 "entry that differs from nearly all others of its category"
+OPT_CASE=0; run_checks
 expect_not term-mismatch 38 "matching TERM block is not reported"
 for i in "${!F_ID[@]}"; do
   if [[ ${F_ID[i]} == duplicate && ${F_LINE[i]} == 23 ]]; then
