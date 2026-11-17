@@ -3087,12 +3087,12 @@ render_footer() {
   local -a hints=()
   case $2 in
     picker) hints=("$GL_K_ARROWS|choose" "Tab|next field" "$GL_K_SPACE|toggle" "$GL_K_ENTER|accept"
-                   "Esc q|cancel" "?|help" "e|type a code" "r|reset") ;;
+                   "Esc/q|cancel" "?|help" "e|type a code" "r|reset") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
     *)      k=$GL_K_MOVE
             l="q|quit"
-            [[ $T_VIEW == palette ]] && l="Esc q|section view"
+            [[ $T_VIEW == palette ]] && l="Esc/q|section view"
             hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
                    "s|save" "$l" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
@@ -3101,6 +3101,8 @@ render_footer() {
     k=${h%%|*} l=${h#*|}
     add=$(( ${#k} + ${#l} + 4 ))
     (( len + add > room )) && break
+    # a slash between two keys (Esc/q) is dim, like the meaning
+    [[ $k == ?*/?* ]] && k="${k%%/*}${C_0}${C_D}/${C_0}${C_B}${k#*/}"
     out+="${C_B}$k${C_0} ${C_D}$l${C_0}   "
     len=$(( len + add ))
   done
@@ -3535,17 +3537,6 @@ wrap_words() {
   [[ -n $line ]] && WRAP+=("$line")
 }
 
-# strip_paint VALUE BG TEXT -> RET: TEXT in the colour VALUE on a strip of
-# background BG, roughly as it looks on a dark or a light terminal.
-strip_paint() {
-  local code
-  sgr_parse "$1"
-  if (( ! USE_COLOUR )) || [[ -n $SGR_BAD ]]; then RET=" $3 "; return; fi
-  sgr_compose "$SGR_FG" "${SGR_BG:-$2}" "$SGR_ATTRS" "$SGR_EXTRA" 0 0
-  code=$RET
-  RET="${ESC}[0;${2}m ${ESC}[0;${code}m$3${ESC}[0;${2}m ${ESC}[0m"
-}
-
 # field_rows FIELD W: the label and the palette rows of a field.
 field_rows() {
   local field=$1 w=$2 idx b saved rows r i line first last name len
@@ -3609,19 +3600,15 @@ render_picker() {
   spaces "$(( w - ${#title} - ${#sec} - 3 ))"
   rp_add "  ${C_B}$title${C_0}$RET${C_D}$sec${C_0} "
   rp_add "" 1
-  # the sample on a dark and on a light strip, now and before
+  # the sample on the terminal's own background, now and before
   name=${E_NAME[ref]}
-  nw=$(( (w - 12) / 2 ))
+  nw=$(( w - 12 ))
   (( nw < 4 )) && nw=4
   name=${name:0:nw}
-  strip_paint "$value" 40 "$name"; line="  ${C_B}new${C_0}  $RET "
-  strip_paint "$value" 107 "$name"; line+="$RET  ${C_D}$value${C_0}"
+  paint "$value" "$name"; line="  ${C_B}new${C_0}  $RET  ${C_D}$value${C_0}"
   rp_add "$line"
-  strip_paint "$PK_START" 40 "$name"; line="  ${C_D}was${C_0}  $RET "
-  strip_paint "$PK_START" 107 "$name"; line+="$RET  ${C_D}${PK_OLD}${C_0}"
+  paint "$PK_START" "$name"; line="  ${C_D}was${C_0}  $RET  ${C_D}${PK_OLD}${C_0}"
   rp_add "$line"
-  wrap_words "The strips are an approximation: your terminal's own background is what counts." "$(( w - 4 ))"
-  for line in "${WRAP[@]}"; do rp_add "  ${C_D}$line${C_0}" 2; done
   if (( PK_GRP >= 0 && PK_GDIFF )); then
     wrap_words "$PK_GDIFF of the entries have another colour; accepting gives all of them this one." "$(( w - 4 ))"
     for line in "${WRAP[@]}"; do rp_add "  ${C_Y}$line${C_0}"; done

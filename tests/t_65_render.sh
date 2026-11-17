@@ -209,7 +209,7 @@ is "${RET:1:21}" "+|||||||||||||||||||+" "split: the panes are divided by one st
 has "$frame" "|  .tar / .TAR" "split: the picker is on the right"
 has "$frame" ">    example.tar" "split: the list stays on the left"
 has "$frame" "Foreground   red" "split: the colour under the cursor is named next to the field"
-has "$frame" "approximation" "split: the strips come with a note"
+has "$frame" "was " "split: the picker shows the colour before"
 layout; is "$T_LAYOUT" split "at 100 columns the picker opens beside the list"
 COLS=99; layout; is "$T_LAYOUT" full "below 100 columns it takes the whole screen"
 COLS=39; layout; is "$T_LAYOUT" small "below 40 columns the terminal is too small"
@@ -325,7 +325,7 @@ while IFS= read -r label; do
 done < <(declare -f cmd_edit open_picker show_help | grep -E '^\s*[^ ()]+( \| [^ ()]+)*\)$')
 is "$undocumented" "" "every key the editor handles is in the help screen"
 plain render_footer 200 picker ""
-has "$RET" "Esc q cancel" "the picker's hints name q next to Esc"
+has "$RET" "Esc/q cancel" "the picker's hints name q next to Esc"
 plain render_footer 60 list ""
 has "$RET" "? help" "the list's hints keep ? even at 60 columns"
 plain render_footer 200 prompt ""
