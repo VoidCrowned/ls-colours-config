@@ -4130,7 +4130,8 @@ Usage: $PROG edit [OPTIONS] [FILE]
 Change the colours of existing entries in a full-screen editor. Every entry
 is shown with a sample name in its current colour. Colours are picked from a
 palette and bold, dim, underline, reverse and blink are switched on and off;
-nobody has to type a code.
+nobody has to type a code. From 100 columns the picker opens beside the
+list, narrower it takes the whole screen.
 
 Options:
   --256              offer the 256-colour palette in the picker
@@ -4139,10 +4140,11 @@ Options:
   --ascii            draw with ASCII characters only (the default when the
                      locale is not UTF-8)
 
-Keys: arrows or h/j/k/l to move, Enter to edit, Space to fold a section,
-z / Z to fold or unfold all, / to search, x to switch between colours in
-words and codes, c for case pairs, u to undo, s to save, q to quit, ? for
-the full list.
+Keys: arrows or h/j/k/l to move, Enter to edit (on a heading: the whole
+section), Space to fold a section, z / Z to fold or unfold all, / to search,
+v for the palette view (entries grouped by colour), x to switch between
+colours in words and codes, c for case pairs, u to undo the entry under the
+cursor, U to undo everything, s to save, q to quit, ? for the full list.
 
 edit only changes entries that exist. Adding entries and reorganising the
 file is the job of fix.

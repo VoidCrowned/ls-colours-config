@@ -2,6 +2,11 @@
 
 My terminal tool for the file that decides the colours of `ls`: it previews, checks, repairs and edits a GNU `dircolors` configuration. One bash script, no dependencies beyond bash and GNU coreutils.
 
+<!-- Screenshots to take for the new editor (replace docs/screenshot.png):
+  1. edit, section view with the sections folded (reference file, 100+ columns)
+  2. edit, split pane: list on the left, picker on the right with the dark and light strips
+  3. edit, palette view (v) with a couple of colour groups unfolded
+-->
 <p align="center"><img src="docs/screenshot.png" alt="The colour picker of the editor: a sample name in its current colour, the palettes for foreground and background, and the switches for bold, dim, underline, reverse and blink" width="544"></p>
 
 ## Install
@@ -58,11 +63,20 @@ Then it shows the complete diff and asks once before writing.
 
 ### `edit`
 
-A full-screen editor for the colours of existing entries. Each row shows a sample name in its current colour. Enter opens a picker for foreground, background and bold, dim, underline, reverse and blink with a live preview; typing a code by hand is possible (`e`) but never needed.
+A full-screen editor for the colours of existing entries. Each row shows a sample name in its current colour, its pattern and the colour in words ("red, bold"; `x` shows the codes instead). Names that are hard to read in their colour are repeated in plain text, and rows that `check` has something to say about carry a `!`, with the finding shown at the bottom.
 
-Keys: arrows or `h` `j` `k` `l`, Enter, `/` search, `c` join or separate case pairs, `u` undo, `s` save, `q` quit, `?` help.
+- **Sections** fold and unfold with Space; `z` folds all, `Z` unfolds all. A large file starts folded. Each heading shows how many entries the section has, their most common colour and how many differ.
+- **The picker** opens with Enter. From 100 columns it sits beside the list, which shows the colour under the cursor live; narrower, it takes the whole screen. It has the 8 normal and 8 bright colours (the whole 256 with `--256`), bold, dim, underline, reverse and blink, and the sample on a dark and a light strip. Typing a code by hand (`e`) is possible but never needed.
+- **A whole section at once:** Enter on a heading gives every entry of the section one colour. If they had different colours, it says how many change and asks first.
+- **Palette view:** `v` groups the entries by colour instead of by section, the most used colour first. Enter on a colour recolours all of its entries; Esc or `q` goes back to the section view.
+- **Undo:** `u` undoes the changes of the entry under the cursor (on a heading: of the whole section), `U` undoes all changes.
+- **Search** with `/`: only sections with matches stay, unfolded. Esc clears it.
 
-Case pairs such as `.deb` / `.DEB` are one entry and are edited together. Changes are staged and only written after you have seen the diff and confirmed.
+Keys: arrows or `h` `j` `k` `l`, Enter, Space, `/`, `v`, `x`, `c` (join or separate case pairs), `u`, `U`, `s` save, `q` quit, `?` for all of them.
+
+Case pairs such as `.deb` / `.DEB` are one entry and are edited together. Changes are staged and only written after you have seen the diff and confirmed; `q` and Ctrl-C ask before throwing away unsaved changes.
+
+The editor needs a terminal of at least 40 × 10. It draws with box and block characters in a UTF-8 locale and with plain ASCII otherwise; `--ascii` forces ASCII.
 
 ## Options
 
@@ -73,6 +87,7 @@ Case pairs such as `.deb` / `.DEB` are one entry and are edited together. Change
 | `--dry-run`, `-n` | `fix` and `edit` show what would change and write nothing. |
 | `--scan DIR` | `check` and `fix` also suggest the extensions found under `DIR`. |
 | `--term NAME` | Judge `TERM` lines as if `$TERM` were `NAME`. |
+| `--ascii` | `edit` draws with ASCII characters only. |
 | `--colour WHEN` | `auto` (default), `always` or `never`. `--no-colour` is short for `never`. |
 
 Every option with "colour" in its name also accepts the spelling "color".
