@@ -152,12 +152,14 @@ T_MSG="Undone."
 frame_text
 has "$RET" "${NL} Undone.${NL}" "...and so is a message"
 T_MSG=""
-PK_REF=0 PK_OLD=31 T_FOCUS=picker T_CTX=picker
+ROWS=24
+PK_REF=0 PK_OLD=31 PK_START=31 PK_FILE=31 T_FOCUS=picker T_CTX=picker
 picker_load 31
 frame_text
-has "$RET" "Foreground: red" "the picker takes the place of the list"
+has "$RET" "Foreground   red" "below $SPLIT_COLS columns the picker takes the place of the list"
 has "$RET" "arrows choose" "...with its own hints"
 T_FOCUS=list T_CTX=list
+ROWS=12
 
 # the same screen with box-drawing characters, when the system has a UTF-8 locale
 if ( LC_ALL=C.UTF-8; x="─"; (( ${#x} == 1 )) ) 2>/dev/null; then
@@ -172,3 +174,99 @@ if ( LC_ALL=C.UTF-8; x="─"; (( ${#x} == 1 )) ) 2>/dev/null; then
 else
   skip "UTF-8 frame" "no C.UTF-8 locale"
 fi
+
+group "edit: split pane, full-screen picker and small terminals"
+render_state
+# open_picker without its key loop: the state it sets up
+picker_open_state() {
+  entry_values "$1"
+  PK_START=$EV_EFF PK_OLD=$EV_EFF PK_REF=$1
+  file_value "$1"; PK_FILE=$RET
+  picker_load "$PK_START"
+  PK_FIELD=0 PK_AT=0 T_FOCUS=picker T_CTX=picker
+  CUR_ID="e:$1"; place_cursor
+}
+# columns_at N: the characters in column N (1-based) of every line of $RET
+columns_at() {
+  local line out=""
+  while IFS= read -r line; do out+="${line:$(( $1 - 1 )):1}"; done <<<"$RET"
+  RET=$out
+}
+picker_open_state 0
+COLS=100 ROWS=24
+frame_text
+frame=$RET
+widest "$frame"
+is "$RET" 100 "split: no row is wider than the terminal"
+RET=$frame; columns_at 56
+is "${RET:1:21}" "+|||||||||||||||||||+" "split: the panes are divided by one straight line"
+has "$frame" "|  .tar / .TAR" "split: the picker is on the right"
+has "$frame" ">    example.tar" "split: the list stays on the left"
+has "$frame" "Foreground   red" "split: the colour under the cursor is named next to the field"
+has "$frame" "approximation" "split: the strips come with a note"
+layout; is "$T_LAYOUT" split "at 100 columns the picker opens beside the list"
+COLS=99; layout; is "$T_LAYOUT" full "below 100 columns it takes the whole screen"
+COLS=39; layout; is "$T_LAYOUT" small "below 40 columns the terminal is too small"
+COLS=100 ROWS=15; layout; is "$T_LAYOUT" small "...and so it is below 16 rows while the picker is open"
+T_FOCUS=list; layout; is "$T_LAYOUT" list "...while the list alone gets by with 10"
+T_FOCUS=picker
+COLS=30 ROWS=12
+frame_text
+has "$RET" "too small" "a small terminal gets a note instead of a broken screen"
+has "$RET" "it is 30 x 12 now" "...that says how big it is"
+widest "$RET"; ok "...and fits" test "$RET" -le 30
+
+# the edited entry changes in the list as the cursor moves over the colours
+COLS=100 ROWS=24
+picker_move 0 2
+preview_set
+frame_text
+has "$RET" ">    example.tar       .tar / .TAR     * -> yellow" "the list shows the colour under the picker's cursor"
+has "$RET" "0 unsaved" "...without staging it"
+PV=(); build_rows
+frame_text
+has "$RET" ">    example.tar       .tar / .TAR     red" "cancelling leaves the list as it was"
+
+group "edit: the palette"
+picker_open_state 1
+is "$FG_B|$PK_SFG|$PK_FG" "1|3|3" "the colour in the file has a mark of its own (here also the cursor)"
+picker_move 0 1
+render_picker 44 30
+out=$(printf '%s\n' "${RP_TXT[@]}")
+has "$out" "df $GL_SW $GL_SW $GL_SAVED $PK_MARK $GL_SW" "the saved colour and the cursor are marked differently"
+has "$out" "  Foreground   yellow" "the field names the colour under the cursor"
+picker_move 1 0
+is "${FG_CELLS[PK_FG]}" 93 "down from a normal colour is its bright twin"
+picker_move -1 0; picker_move -1 0
+is "$PK_FIELD|${FG_CELLS[PK_FG]}" "0|33" "up from the top row stays in the foreground"
+picker_move 0 -9
+is "${FG_CELLS[PK_FG]}" "" "the default is the first cell"
+picker_move 1 0
+is "${FG_CELLS[PK_FG]}" 90 "...and down from it is the first bright colour"
+picker_move 1 0
+is "$PK_FIELD" 1 "down from the bright row goes to the background"
+picker_load "38;5;208"; PK_FIELD=0
+is "$FG_B|${FG_CELLS[0]}" "2|38;5;208" "a value the palette lacks gets a cell in front"
+picker_move 1 0
+is "${FG_CELLS[PK_FG]}" 90 "...and the bright row still starts under the normal colours"
+PK_FILE="00;31"; picker_load "01;34"
+picker_move 0 1
+picker_load "$PK_FILE"
+picker_value; is "$RET" "00;31" "r goes back to the colour in the file"
+OPT_256=1 PK_FILE=31
+picker_load 31
+render_picker 44 12
+is "${#RP_TXT[@]}" 12 "a short pane shows as many rows as it has"
+has "$(printf '%s\n' "${RP_TXT[@]}")" "Foreground" "...keeping the field that has the focus"
+PK_FIELD=1
+render_picker 44 12
+has "$(printf '%s\n' "${RP_TXT[@]}")" "Background" "...also when the focus moves on"
+render_picker 44 40
+bad=""
+for r in "${!RP_TXT[@]}"; do strip_sgr "${RP_TXT[r]}"; (( ${#RET} == RP_LEN[r] && ${#RET} <= 44 )) || bad+=" $r"; done
+is "$bad" "" "every row of the picker fits the pane and knows its width"
+PK_CW=36
+is "$(grid_rows_n 1; printf %s "$RET")" 9 "full width: 2 rows of 16 colours, 6 of the cube, 1 of greys"
+PK_CW=18
+is "$(grid_rows_n 1; printf %s "$RET")" 16 "in the pane: 2, 12 and 2"
+OPT_256=0 PK_CW=36

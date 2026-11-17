@@ -114,6 +114,14 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   is "$(cat "$F")" "$before" "declining the review writes nothing"
   tui "$F" --dry-run -- '\r' 'l' '\r' 's' '\n' 'q' 'y'
   is "$(cat "$F")" "$before" "--dry-run never writes"
+  # the terminal shrinks and grows again while the picker is open
+  OUT=$({ sleep 0.8; printf '\r'; sleep 0.5; printf 'l'; sleep 3.6; printf '\033'; sleep 0.5; printf 'q'; sleep 0.3; printf 'y'; } |
+    TERM=xterm script -qec "stty rows 30 cols 110; (sleep 1.6; stty cols 80 rows 24 </dev/tty; sleep 1; stty cols 30 rows 12 </dev/tty; sleep 1; stty cols 110 rows 30 </dev/tty) </dev/null & exec '$BASH' '$SCRIPT' edit '$F'" /dev/null 2>&1)
+  RC=$?
+  # the output is long, and the texts looked for are each written in one piece
+  has "$OUT" "Foreground" "resizing: the picker is drawn"
+  has "$OUT" "too small" "...a terminal that gets too small shows a note"
+  is "$RC|$(cat "$F")" "0|$before" "...Esc still cancels and nothing is written"
   tui "$F" -- '\r' 'l' '\r' '\003'
   is "$RC" 130 "Ctrl-C ends the editor"
   has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"

@@ -212,12 +212,12 @@ setup_colour() {
   esac
   if (( USE_COLOUR )); then
     C_B="${ESC}[1m" C_D="${ESC}[2m" C_R="${ESC}[31m" C_G="${ESC}[32m"
-    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_0="${ESC}[0m"
+    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_U="${ESC}[4m" C_0="${ESC}[0m"
   else
-    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
+    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_U="" C_0=""
   fi
 }
-C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
+C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_U="" C_0=""
 
 # paint CODE TEXT -> RET: TEXT wrapped in the SGR code, the way ls prints it.
 paint() {
@@ -237,9 +237,22 @@ sample_name() {
   esac
 }
 
-# strip_sgr TEXT -> RET without escape sequences.
+# strip_sgr TEXT -> RET without escape sequences (ESC [ numbers m or K).
+# A loop over the sequences: an extglob pattern is far slower on rows with
+# many colours.
 strip_sgr() {
-  RET=${1//"$ESC"\[*([0-9;])[mK]/}
+  local t=$1 out="" seq
+  while [[ $t == *"${ESC}["* ]]; do
+    out+=${t%%"${ESC}["*}
+    t=${t#*"${ESC}["}
+    seq=${t%%[!0-9;]*}
+    t=${t:${#seq}}
+    case $t in
+      [mK]*) t=${t:1} ;;
+      *)     out+="${ESC}[$seq" ;;
+    esac
+  done
+  RET=$out$t
 }
 
 # resolve_path PATH -> RET: PATH with a final symlink chain followed.
@@ -2476,11 +2489,13 @@ T_CUR=0 T_TOP=0 T_FILTER="" T_MSG="" RESIZED=0 KEY=""
 T_RAW=0            # x: show codes instead of descriptions
 T_FOCUS=list       # list or picker: what the keys go to
 T_CTX=list         # which key hints the last row shows
+T_LAYOUT=list LIST_DIM=0
 COLOUR_NAMES=(black red green yellow blue magenta cyan white)
 
 # Picker state.
 declare -a FG_CELLS=() BG_CELLS=()
-FG_ROW0=0 BG_ROW0=0 PK_FIELD=0 PK_FG=0 PK_BG=0 PK_AT=0
+declare -A PV=()                     # entry -> the value the open picker shows
+FG_B=1 BG_B=1 PK_START="" PK_FIELD=0 PK_FG=0 PK_BG=0 PK_AT=0
 PK_ATTRS=" " PK_EXTRA="" PK_PAD=1 PK_ZERO=0 PK_RAW="" PK_TOUCHED=0
 PK_REF=0 PK_OLD=""                   # the entry in the picker, and its value before
 
@@ -2795,13 +2810,14 @@ remember_cursor() {
 }
 
 # entry_values INDEX: EV_LIST = the distinct values of the entry right now,
-# EV_EFF = the one ls uses (last line), EV_MOD = 1 when a change is staged.
+# EV_EFF = the one ls uses (last line), EV_MOD = 1 when it differs from the
+# file. "Right now" includes what an open picker shows (PV).
 entry_values() {
   local i v last=0
   EV_LIST=() EV_EFF="" EV_MOD=0
   for i in ${E_LINES[$1]}; do
-    v=${ST[i]-${L_VAL[i]}}
-    [[ -n ${ST[i]+x} ]] && EV_MOD=1
+    v=${PV[$1]-${ST[i]-${L_VAL[i]}}}
+    [[ $v != "${L_VAL[i]}" ]] && EV_MOD=1
     [[ " ${EV_LIST[*]} " == *" $v "* ]] || EV_LIST+=("$v")
     if (( i > last )); then last=$i EV_EFF=$v; fi
   done
@@ -2832,11 +2848,11 @@ setup_glyphs() {
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▌" GL_OPEN="▾" GL_SHUT="▸"
-    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌"
+    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••"
     GL_K_MOVE="↑↓" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
-    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>"
+    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".."
     GL_K_MOVE="up/down" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
@@ -3040,7 +3056,10 @@ render_list() {
     kind=${ROW_KIND[idx]} ref=${ROW_REF[idx]}
     # the cursor is a bar in the margin and a brighter text; reverse video
     # would be mistaken for the colour of an entry
-    if (( idx == T_CUR )); then gutter="${C_B}${C_C}$GL_CUR${C_0}"; else gutter=" "; fi
+    if (( idx != T_CUR )); then gutter=" "
+    elif (( LIST_DIM )); then gutter="${C_D}$GL_CUR${C_0}"
+    else gutter="${C_B}${C_C}$GL_CUR${C_0}"
+    fi
     if [[ $kind == h ]]; then
       # fold marker, title, number of entries, what colour they have
       if is_folded "$ref"; then mark=$GL_SHUT; else mark=$GL_OPEN; fi
@@ -3058,7 +3077,10 @@ render_list() {
       limit=$(( w - wt - 12 ))
       (( limit < 0 )) && limit=0
       if (( ${#plain} > limit )); then plain=${plain:0:limit} tail="${C_D}$plain${C_0}"; fi
-      if (( idx == T_CUR )); then name="${C_B}${C_C}$name${C_0}"; else name="${C_B}$name${C_0}"; fi
+      if (( idx == T_CUR && ! LIST_DIM )); then name="${C_B}${C_C}$name${C_0}"
+      elif (( LIST_DIM )); then name="${C_D}$name${C_0}"
+      else name="${C_B}$name${C_0}"
+      fi
       LP_TXT[r]="$gutter$mark $name$pad1  ${C_D}$cell${C_0}   $tail"
       LP_LEN[r]=$(( wt + 12 + ${#plain} ))
       continue
@@ -3075,7 +3097,8 @@ render_list() {
     spaces "$(( wn - clen ))"; pad1=$RET
     spaces "$(( wl - ${#label} ))"; pad2=$RET
     row_text "$ref" "$(( w - wn - wl - 9 ))"
-    (( idx == T_CUR )) && label="${C_B}$label${C_0}"
+    (( idx == T_CUR && ! LIST_DIM )) && label="${C_B}$label${C_0}"
+    (( LIST_DIM )) && label="${C_D}$label${C_0}"
     warn=" "
     [[ -n ${E_WARN[ref]:-} ]] && warn="${C_Y}$GL_WARN${C_0}"
     LP_TXT[r]="$gutter  $warn $cell$pad1  $label$pad2  $RET"
@@ -3107,31 +3130,89 @@ info_line() {
   fi
 }
 
+# The layout follows the size of the terminal on every frame, so a resize
+# switches between them even while the picker is open:
+#   list    the list alone
+#   split   the list on the left, the picker on the right (wide terminals)
+#   full    the picker alone (narrower terminals)
+#   small   a note that the terminal is too small
+SPLIT_COLS=100 MIN_COLS=40 MIN_ROWS=10 MIN_ROWS_PICKER=16 PANE_R=44
+layout() {
+  T_LAYOUT=list
+  if (( COLS < MIN_COLS || ROWS < MIN_ROWS )); then
+    T_LAYOUT="small"
+  elif [[ $T_FOCUS == picker ]]; then
+    if (( ROWS < MIN_ROWS_PICKER )); then T_LAYOUT="small"
+    elif (( COLS >= SPLIT_COLS )); then T_LAYOUT="split"
+    else T_LAYOUT="full"
+    fi
+  fi
+}
+
 # compose_frame -> RET: the whole screen as frame text for emit_frame.
-# Row 1 header, row 2 a rule, then the list or the picker, a rule, the
-# message row and the key hints.
+# Row 1 header, row 2 a rule, then the panes, a rule, the message row and
+# the key hints.
 compose_frame() {
-  local buf r h=$(( ROWS - 5 )) pos=""
+  local buf r h=$(( ROWS - 5 )) pos="" lw rw lrule rrule line
   (( h < 1 )) && h=1
+  layout
+  if [[ $T_LAYOUT == small ]]; then
+    local -a lines=()
+    buf=""
+    wrap_words "The terminal is too small for the editor." "$(( COLS - 2 ))"
+    lines=("${WRAP[@]}" "")
+    if [[ $T_FOCUS == picker ]]; then r=$MIN_ROWS_PICKER; else r=$MIN_ROWS; fi
+    wrap_words "Please make it at least $MIN_COLS columns wide and $r rows high (it is $COLS x $ROWS now)." "$(( COLS - 2 ))"
+    lines+=("${WRAP[@]}" "")
+    if [[ $T_FOCUS == picker ]]; then wrap_words "Esc closes the colour picker." "$(( COLS - 2 ))"
+    else wrap_words "q quits." "$(( COLS - 2 ))"
+    fi
+    WRAP=("${lines[@]}" "${WRAP[@]}")
+    for (( r = 1; r <= ROWS; r++ )); do
+      buf+="${ROW_AT}${r}${ROW_TXT}"
+      (( r >= 2 && r - 2 < ${#WRAP[@]} )) && buf+=" ${WRAP[r-2]:0:$(( COLS - 1 > 0 ? COLS - 1 : 0 ))}"
+    done
+    RET=$buf
+    return
+  fi
   render_header "$COLS"
   buf="${ROW_AT}1${ROW_TXT}$RET"
-  rule "$COLS"
-  buf+="${ROW_AT}2${ROW_TXT}${C_D}$RET${C_0}"
-  if [[ $T_FOCUS == picker ]]; then
-    render_picker "$COLS" "$h"
-    for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${RP_TXT[r]:-}"; done
-  else
-    render_list "$COLS" "$h"
-    for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}"; done
-  fi
-  rule "$COLS"
-  buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}${C_D}$RET${C_0}"
+  case $T_LAYOUT in
+    split)
+      rw=$PANE_R lw=$(( COLS - PANE_R - 1 ))
+      LIST_DIM=1
+      render_list "$lw" "$h"
+      LIST_DIM=0
+      render_picker "$rw" "$h"
+      # the pane with the focus has the bright rule
+      rule "$lw"; lrule="${C_D}$RET${C_0}"
+      rule "$rw"; rrule="${C_C}$RET${C_0}"
+      buf+="${ROW_AT}2${ROW_TXT}$lrule${C_D}$GL_TEE${C_0}$rrule"
+      for (( r = 0; r < h; r++ )); do
+        spaces "$(( lw - LP_LEN[r] ))"
+        buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}${C_0}$RET${C_D}$GL_V${C_0}${RP_TXT[r]:-}"
+      done
+      buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$lrule${C_D}$GL_FOOT${C_0}$rrule" ;;
+    full)
+      rule "$COLS"; line="${C_C}$RET${C_0}"
+      buf+="${ROW_AT}2${ROW_TXT}$line"
+      render_picker "$COLS" "$h"
+      for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${RP_TXT[r]:-}"; done
+      buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line" ;;
+    *)
+      rule "$COLS"; line="${C_D}$RET${C_0}"
+      buf+="${ROW_AT}2${ROW_TXT}$line"
+      render_list "$COLS" "$h"
+      for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}"; done
+      buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line" ;;
+  esac
   info_line "$COLS"
   buf+="${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}$RET"
   case ${ROW_KIND[T_CUR]:-} in
     e) pos="${E_ORD[${ROW_REF[T_CUR]}]}/$T_TOTAL" ;;
     h) pos="$T_TOTAL entries" ;;
   esac
+  [[ $T_FOCUS == picker ]] && pos=""
   render_footer "$COLS" "$T_CTX" "$pos"
   buf+="${ROW_AT}${ROWS}${ROW_TXT}$RET"
   RET=$buf
@@ -3144,12 +3225,17 @@ draw_screen() {
 
 # --- the colour picker -------------------------------------------------------
 
-# swatch VALUE SELECTED -> RET: a two-character cell showing the colour.
+# swatch VALUE STATE -> RET: a two-character cell showing the colour. STATE 1
+# is the cell under the picker's cursor, 2 the colour that is in the file.
 swatch() {
   local v=$1 bg n light=0 text="  "
   case $v in
     "")
-      if (( $2 )); then RET="${ESC}[7mdf${ESC}[0m"; else RET="${C_D}df${C_0}"; fi
+      case $2 in
+        1) RET="${ESC}[7mdf${ESC}[0m" ;;
+        2) RET="${C_B}${C_U}df${C_0}" ;;
+        *) RET="${C_D}df${C_0}" ;;
+      esac
       return ;;
     3[0-7])  bg="4${v:1:1}"; n=${v:1:1} ;;
     4[0-7])  bg=$v; n=${v:1:1} ;;
@@ -3166,50 +3252,77 @@ swatch() {
   else
     (( n >= 244 )) && light=1
   fi
-  (( $2 )) && text=$PK_MARK
-  if (( light )); then RET="${ESC}[${bg};30m${text}${ESC}[0m"; else RET="${ESC}[${bg};97m${text}${ESC}[0m"; fi
+  case $2 in
+    1) text=$PK_MARK ;;
+    2) text=$GL_SAVED ;;
+  esac
+  if (( ! USE_COLOUR )); then
+    RET=$text
+    [[ $text == "  " ]] && RET=$GL_SW
+  elif (( light )); then
+    RET="${ESC}[${bg};30m${text}${ESC}[0m"
+  else
+    RET="${ESC}[${bg};97m${text}${ESC}[0m"
+  fi
 }
 
-# picker_cells: the choices for foreground and background. A value that the
-# palette does not offer (a 256-colour code in 16-colour mode, say) gets a
-# cell of its own in front, so it is shown and kept unless changed.
+# picker_cells FG BG: the choices for foreground and background: default,
+# the 8 normal and the 8 bright colours, then with --256 the rest of the 256.
+# A value that the palette does not offer (a 256-colour code in 16-colour
+# mode, say) gets a cell of its own in front, so it is shown and kept unless
+# changed. FG_B and BG_B count the cells in front of the 16 colours.
 picker_cells() {
   local fg=$1 bg=$2 n i
   FG_CELLS=("") BG_CELLS=("")
   for (( n = 0; n < 8; n++ )); do FG_CELLS+=("3$n"); BG_CELLS+=("4$n"); done
   for (( n = 0; n < 8; n++ )); do FG_CELLS+=("9$n"); BG_CELLS+=("10$n"); done
-  FG_ROW0=17 BG_ROW0=17
+  FG_B=1 BG_B=1
   if (( OPT_256 )); then
     for (( n = 16; n < 256; n++ )); do FG_CELLS+=("38;5;$n"); BG_CELLS+=("48;5;$n"); done
   fi
   PK_FG=-1 PK_BG=-1
   for i in "${!FG_CELLS[@]}"; do [[ ${FG_CELLS[i]} == "$fg" ]] && PK_FG=$i; done
   for i in "${!BG_CELLS[@]}"; do [[ ${BG_CELLS[i]} == "$bg" ]] && PK_BG=$i; done
-  if (( PK_FG < 0 )); then FG_CELLS=("$fg" "${FG_CELLS[@]}"); FG_ROW0=18 PK_FG=0; fi
-  if (( PK_BG < 0 )); then BG_CELLS=("$bg" "${BG_CELLS[@]}"); BG_ROW0=18 PK_BG=0; fi
+  if (( PK_FG < 0 )); then FG_CELLS=("$fg" "${FG_CELLS[@]}"); FG_B=2 PK_FG=0; fi
+  if (( PK_BG < 0 )); then BG_CELLS=("$bg" "${BG_CELLS[@]}"); BG_B=2 PK_BG=0; fi
 }
 
-# grid_row INDEX ROW0 -> RET row, RET2 column. Row 0 holds the default and the
-# 16 colours, rows 1-6 the colour cube, row 7 the greys.
-grid_row() {
-  local i=$1 row0=$2
-  if (( i < row0 )); then
-    RET=0 RET2=$i
-  elif (( i < row0 + 216 )); then
-    RET=$(( (i - row0) / 36 + 1 )) RET2=$(( (i - row0) % 36 ))
+# The palette of a field is drawn in rows: row 0 holds the cells in front
+# (default, and an unusual value) and the 8 normal colours, row 1 the 8 bright
+# colours under them. With --256 the colour cube follows, PK_CW cells a row
+# (36 when there is room, otherwise 18), then the 24 greys.
+
+# grid_rows_n B -> RET: how many rows the palette has.
+grid_rows_n() {
+  if (( OPT_256 )); then RET=$(( 2 + 216 / PK_CW + 24 / (PK_CW * 2 / 3) )); else RET=2; fi
+}
+
+# grid_start ROW B -> RET first index of the row, RET2 its length, RET3 the
+# number of empty cells in front of it.
+grid_start() {
+  local r=$1 b=$2 cube=$(( 216 / PK_CW )) gw=$(( PK_CW * 2 / 3 ))
+  if (( r == 0 )); then
+    RET=0 RET2=$(( b + 8 )) RET3=0
+  elif (( r == 1 )); then
+    RET=$(( b + 8 )) RET2=8 RET3=$b
+  elif (( r < 2 + cube )); then
+    RET=$(( b + 16 + (r - 2) * PK_CW )) RET2=$PK_CW RET3=0
   else
-    RET=7 RET2=$(( i - row0 - 216 ))
+    RET=$(( b + 16 + 216 + (r - 2 - cube) * gw )) RET2=$gw RET3=0
   fi
 }
 
-# grid_start ROW ROW0 -> RET first index of the row, RET2 its length.
-grid_start() {
-  if (( $1 == 0 )); then
-    RET=0 RET2=$2
-  elif (( $1 < 7 )); then
-    RET=$(( $2 + ($1 - 1) * 36 )) RET2=36
+# grid_row INDEX B -> RET row, RET2 column within the row.
+grid_row() {
+  local i=$1 b=$2 cube=$(( 216 / PK_CW )) gw=$(( PK_CW * 2 / 3 ))
+  if (( i < b + 8 )); then
+    RET=0 RET2=$i
+  elif (( i < b + 16 )); then
+    RET=1 RET2=$(( i - b - 8 ))
+  elif (( i < b + 16 + 216 )); then
+    RET=$(( 2 + (i - b - 16) / PK_CW )) RET2=$(( (i - b - 16) % PK_CW ))
   else
-    RET=$(( $2 + 216 )) RET2=24
+    RET=$(( 2 + cube + (i - b - 232) / gw )) RET2=$(( (i - b - 232) % gw ))
   fi
 }
 
@@ -3220,9 +3333,10 @@ picker_value() {
 }
 
 # picker_move DY DX: move inside the grid of the focused field; leaving it at
-# the top or bottom goes to the neighbouring field.
+# the top or bottom goes to the neighbouring field. Up and down keep the
+# column on screen.
 picker_move() {
-  local dy=$1 dx=$2 idx row0 ncells rows=1 row col
+  local dy=$1 dx=$2 idx b ncells row col vis
   PK_RAW=""
   if (( PK_FIELD == 2 )); then
     PK_AT=$(( PK_AT + dx ))
@@ -3232,100 +3346,231 @@ picker_move() {
     return
   fi
   if (( PK_FIELD == 0 )); then
-    idx=$PK_FG row0=$FG_ROW0 ncells=${#FG_CELLS[@]}
+    idx=$PK_FG b=$FG_B ncells=${#FG_CELLS[@]}
   else
-    idx=$PK_BG row0=$BG_ROW0 ncells=${#BG_CELLS[@]}
+    idx=$PK_BG b=$BG_B ncells=${#BG_CELLS[@]}
   fi
-  (( OPT_256 )) && rows=8
   if (( dx )); then
     idx=$(( idx + dx ))
     (( idx < 0 )) && idx=0
     (( idx >= ncells )) && idx=$(( ncells - 1 ))
-    PK_TOUCHED=1
   else
-    grid_row "$idx" "$row0"
+    grid_row "$idx" "$b"
     row=$(( RET + dy )) col=$RET2
+    grid_start "$RET" "$b"
+    vis=$(( RET3 + col ))
+    grid_rows_n "$b"
     if (( row < 0 )); then
       (( PK_FIELD > 0 )) && PK_FIELD=$(( PK_FIELD - 1 ))
       return
-    elif (( row >= rows )); then
+    elif (( row >= RET )); then
       PK_FIELD=$(( PK_FIELD + 1 ))
       return
     fi
-    grid_start "$row" "$row0"
+    grid_start "$row" "$b"
+    col=$(( vis - RET3 ))
+    (( col < 0 )) && col=0
     (( col >= RET2 )) && col=$(( RET2 - 1 ))
     idx=$(( RET + col ))
-    PK_TOUCHED=1
   fi
+  PK_TOUCHED=1
   if (( PK_FIELD == 0 )); then PK_FG=$idx; else PK_BG=$idx; fi
 }
 
-# grid_rows FIELD: add the rows of the palette of a field to RP_TXT.
-grid_rows() {
-  local field=$1 idx row0 rows=1 r i line first last
+# rp_add TEXT [OPTIONAL]: add a row to the picker. Optional rows go when the
+# pane is short: spacing (1) first, from the bottom up, then notes (2).
+# A known WIDTH saves measuring the row later, which is slow for the rows
+# of the palette with an escape sequence for every cell.
+rp_add() {
+  RP_TXT+=("$1")
+  RP_OPT+=("${2:-0}")
+  RP_W+=("${3:--1}")
+}
+
+# wrap_words TEXT W -> WRAP: TEXT broken into lines of at most W characters.
+declare -a WRAP=()
+wrap_words() {
+  local w=$2 line="" word
+  local -a words=()
+  WRAP=()
+  (( w < 10 )) && w=10
+  read -r -a words <<<"$1"
+  for word in "${words[@]}"; do
+    if [[ -n $line ]] && (( ${#line} + 1 + ${#word} > w )); then
+      WRAP+=("$line")
+      line=""
+    fi
+    line+="${line:+ }${word:0:w}"
+  done
+  [[ -n $line ]] && WRAP+=("$line")
+}
+
+# strip_paint VALUE BG TEXT -> RET: TEXT in the colour VALUE on a strip of
+# background BG, roughly as it looks on a dark or a light terminal.
+strip_paint() {
+  local code
+  sgr_parse "$1"
+  if (( ! USE_COLOUR )) || [[ -n $SGR_BAD ]]; then RET=" $3 "; return; fi
+  sgr_compose "$SGR_FG" "${SGR_BG:-$2}" "$SGR_ATTRS" "$SGR_EXTRA" 0 0
+  code=$RET
+  RET="${ESC}[0;${2}m ${ESC}[0;${code}m$3${ESC}[0;${2}m ${ESC}[0m"
+}
+
+# field_rows FIELD W: the label and the palette rows of a field.
+field_rows() {
+  local field=$1 w=$2 idx b saved rows r i line first last name len
   local -a cells=()
   if (( field == 0 )); then
-    cells=("${FG_CELLS[@]}") idx=$PK_FG row0=$FG_ROW0
+    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B saved=$PK_SFG name="Foreground"
   else
-    cells=("${BG_CELLS[@]}") idx=$PK_BG row0=$BG_ROW0
+    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B saved=$PK_SBG name="Background"
   fi
+  describe_colour "${cells[idx]}"
+  if (( PK_FIELD == field )); then
+    rp_add "  ${C_B}${C_C}$name${C_0}   ${C_B}$RET${C_0}"
+  else
+    rp_add "  ${C_D}$name${C_0}   $RET"
+  fi
+  (( PK_FIELD == field )) && RP_FOCUS=${#RP_TXT[@]}
   # the large palette is only unfolded for the field that has the focus
-  (( OPT_256 && PK_FIELD == field )) && rows=8
+  rows=2
+  if (( OPT_256 && PK_FIELD == field )); then grid_rows_n "$b"; rows=$RET; fi
   for (( r = 0; r < rows; r++ )); do
-    grid_start "$r" "$row0"
+    grid_start "$r" "$b"
     first=$RET last=$(( RET + RET2 ))
-    line="    "
+    if (( r < 2 )); then spaces "$(( 3 + RET3 * 3 ))"; else spaces 3; fi
+    line=$RET
+    len=${#line}
     for (( i = first; i < last && i < ${#cells[@]}; i++ )); do
-      swatch "${cells[i]}" "$(( i == idx ))"
+      if (( r < 2 )); then len=$(( len + 3 )); else len=$(( len + 2 )); fi
+      if (( i == idx )); then swatch "${cells[i]}" 1
+      elif (( i == saved )); then swatch "${cells[i]}" 2
+      else swatch "${cells[i]}" 0
+      fi
       line+=$RET
-      (( r == 0 )) && line+=" "
+      (( r < 2 )) && line+=" "
     done
-    RP_TXT+=("$line")
+    # keep the row of the cursor in view when the pane has to scroll
+    (( PK_FIELD == field && i > idx && idx >= first )) && RP_FOCUS=${#RP_TXT[@]}
+    rp_add "$line" 0 "$len"
+  done
+  rp_add "" 1
+}
+
+# render_picker W H: the picker as rows in RP_TXT, at most W wide and, when
+# it has to, cut down to H rows around the field that has the focus.
+declare -a RP_TXT=() RP_OPT=() RP_W=() RP_LEN=()
+PK_CW=36 PK_SFG=-1 PK_SBG=-1 PK_FILE="" RP_FOCUS=0
+render_picker() {
+  local w=$1 h=$2 ref=$PK_REF value title sec pad i line len nw name names=(bold dim underline reverse blink) codes=(1 2 4 7 5)
+  local -a keep=() keepw=()
+  RP_TXT=() RP_OPT=() RP_W=() RP_LEN=() RP_FOCUS=0
+  if (( w >= 76 )); then PK_CW=36; else PK_CW=18; fi
+  picker_value
+  value=$RET
+  # what is being edited, and where it lives
+  title=${E_LABEL[ref]} sec=${E_SEC[ref]}
+  (( ${#sec} > w / 3 )) && sec=${sec:0:$(( w / 3 ))}
+  (( ${#title} > w - ${#sec} - 5 )) && title=${title:0:$(( w - ${#sec} - 5 > 0 ? w - ${#sec} - 5 : 0 ))}
+  spaces "$(( w - ${#title} - ${#sec} - 3 ))"
+  rp_add "  ${C_B}$title${C_0}$RET${C_D}$sec${C_0} "
+  rp_add "" 1
+  # the sample on a dark and on a light strip, now and before
+  name=${E_NAME[ref]}
+  nw=$(( (w - 12) / 2 ))
+  (( nw < 4 )) && nw=4
+  name=${name:0:nw}
+  strip_paint "$value" 40 "$name"; line="  ${C_B}new${C_0}  $RET "
+  strip_paint "$value" 107 "$name"; line+="$RET  ${C_D}$value${C_0}"
+  rp_add "$line"
+  strip_paint "$PK_START" 40 "$name"; line="  ${C_D}was${C_0}  $RET "
+  strip_paint "$PK_START" 107 "$name"; line+="$RET  ${C_D}${PK_OLD}${C_0}"
+  rp_add "$line"
+  wrap_words "The strips are an approximation: your terminal's own background is what counts." "$(( w - 4 ))"
+  for line in "${WRAP[@]}"; do rp_add "  ${C_D}$line${C_0}" 2; done
+  if [[ $PK_OLD == *"|"* ]]; then
+    wrap_words "The spellings of this entry have different colours; accepting sets all of them." "$(( w - 4 ))"
+    for line in "${WRAP[@]}"; do rp_add "  ${C_Y}$line${C_0}"; done
+  fi
+  rp_add "" 1
+  field_rows 0 "$w"
+  field_rows 1 "$w"
+  # the switches, as many to a row as fit
+  if (( PK_FIELD == 2 )); then
+    rp_add "  ${C_B}${C_C}Attributes${C_0}"
+    RP_FOCUS=${#RP_TXT[@]}
+  else
+    rp_add "  ${C_D}Attributes${C_0}"
+  fi
+  line="  " len=2
+  for i in 0 1 2 3 4; do
+    title="[ ] ${names[i]}"
+    [[ $PK_ATTRS == *" ${codes[i]} "* ]] && title="[x] ${names[i]}"
+    if (( len + ${#title} + 1 > w && len > 2 )); then rp_add "$line"; line="  " len=2; fi
+    if (( PK_FIELD == 2 && PK_AT == i )); then
+      line+=" ${C_B}${C_C}$title${C_0} "
+    else
+      line+=" $title "
+    fi
+    len=$(( len + ${#title} + 2 ))
+  done
+  rp_add "$line"
+  if [[ -n $PK_EXTRA ]]; then rp_add "  ${C_D}other codes kept: $PK_EXTRA${C_0}"; fi
+  # too long for the pane: drop the spacing and the notes first
+  local level n=${#RP_TXT[@]}
+  for level in 1 2; do
+    for (( i = ${#RP_OPT[@]} - 1; i >= 0 && n > h; i-- )); do
+      if (( RP_OPT[i] == level )); then RP_OPT[i]=-1; n=$(( n - 1 )); fi
+    done
+  done
+  if (( n < ${#RP_TXT[@]} )); then
+    keep=() keepw=()
+    pad=$RP_FOCUS
+    for i in "${!RP_TXT[@]}"; do
+      if (( RP_OPT[i] < 0 )); then
+        (( i < RP_FOCUS )) && pad=$(( pad - 1 ))
+        continue
+      fi
+      keep+=("${RP_TXT[i]}") keepw+=("${RP_W[i]}")
+    done
+    RP_TXT=("${keep[@]}") RP_W=("${keepw[@]}") RP_FOCUS=$pad
+  fi
+  # still too long: show the part around the focus
+  if (( ${#RP_TXT[@]} > h )); then
+    i=$(( RP_FOCUS - h + 3 ))
+    (( i > ${#RP_TXT[@]} - h )) && i=$(( ${#RP_TXT[@]} - h ))
+    (( i < 0 )) && i=0
+    RP_TXT=("${RP_TXT[@]:i:h}") RP_W=("${RP_W[@]:i:h}")
+  fi
+  for i in "${!RP_TXT[@]}"; do
+    if (( RP_W[i] >= 0 && RP_W[i] <= w )); then
+      # shellcheck disable=SC2034
+      RP_LEN[i]=${RP_W[i]}
+      continue
+    fi
+    fit_row "${RP_TXT[i]}" "$w"
+    # shellcheck disable=SC2034
+    RP_TXT[i]=$RET RP_LEN[i]=$RET2
   done
 }
 
-# render_picker W H: the picker for entry PK_REF as rows in RP_TXT.
-declare -a RP_TXT=()
-render_picker() {
-  local ref=$PK_REF value f title names=(bold dim underline reverse blink) codes=(1 2 4 7 5) i box line
-  RP_TXT=("")
-  picker_value
-  value=$RET
-  RP_TXT+=("  ${C_B}${E_LABEL[ref]}${C_0}  ${C_D}(${E_SEC[ref]})${C_0}")
-  paint "$value" "${E_NAME[ref]}"
-  RP_TXT+=("  $RET    ${C_D}code${C_0} $value    ${C_D}was${C_0} $PK_OLD")
-  if [[ $PK_OLD == *"|"* ]]; then
-    RP_TXT+=("  ${C_Y}The spellings of this entry have different colours; accepting sets all of them.${C_0}")
-  else
-    RP_TXT+=("")
-  fi
-  for f in 0 1; do
-    if (( f == 0 )); then
-      describe_colour "${FG_CELLS[PK_FG]}"
-      title="Foreground: $RET"
+# fit_row TEXT W -> RET text cut to W characters on screen, RET2 its width.
+RE_SGR_AT="^(${ESC}\\[[0-9;]*m)"
+fit_row() {
+  local t=$1 w=$2 out="" n=0
+  strip_sgr "$t"
+  if (( ${#RET} <= w )); then RET2=${#RET} RET=$t; return; fi
+  while [[ -n $t ]] && (( n < w )); do
+    if [[ $t =~ $RE_SGR_AT ]]; then
+      out+=${BASH_REMATCH[1]}
+      t=${t:${#BASH_REMATCH[1]}}
     else
-      describe_colour "${BG_CELLS[PK_BG]}"
-      title="Background: $RET"
-    fi
-    if (( PK_FIELD == f )); then title="${C_B}> $title${C_0}"; else title="  $title"; fi
-    RP_TXT+=("$title")
-    grid_rows "$f"
-    RP_TXT+=("")
-  done
-  if (( PK_FIELD == 2 )); then title="${C_B}> Attributes${C_0}"; else title="  Attributes"; fi
-  RP_TXT+=("$title")
-  line="    "
-  for i in 0 1 2 3 4; do
-    box="[ ]"
-    [[ $PK_ATTRS == *" ${codes[i]} "* ]] && box="[x]"
-    if (( PK_FIELD == 2 && PK_AT == i )); then
-      line+="${C_B}${C_C}$box ${names[i]}${C_0}   "
-    else
-      line+="$box ${names[i]}   "
+      out+=${t:0:1}
+      t=${t:1}
+      n=$(( n + 1 ))
     fi
   done
-  RP_TXT+=("$line")
-  [[ -n $PK_EXTRA ]] && RP_TXT+=("    ${C_D}other codes kept: $PK_EXTRA${C_0}")
+  RET="$out${C_0}" RET2=$n
 }
 
 # picker_load VALUE: set the picker to show VALUE.
@@ -3336,25 +3581,57 @@ picker_load() {
     # nothing sensible to show for a malformed code: start from scratch
     PK_ATTRS=" " PK_EXTRA="" PK_PAD=1 PK_ZERO=0
     picker_cells "" ""
-    return
+  else
+    PK_ATTRS=$SGR_ATTRS PK_EXTRA=$SGR_EXTRA PK_PAD=$SGR_PAD PK_ZERO=$SGR_ZERO
+    picker_cells "$SGR_FG" "$SGR_BG"
   fi
-  PK_ATTRS=$SGR_ATTRS PK_EXTRA=$SGR_EXTRA PK_PAD=$SGR_PAD PK_ZERO=$SGR_ZERO
-  picker_cells "$SGR_FG" "$SGR_BG"
+  # the colours that are in the file get a mark of their own
+  local i
+  PK_SFG=-1 PK_SBG=-1
+  sgr_parse "$PK_FILE"
+  if [[ -z $SGR_BAD ]]; then
+    for i in "${!FG_CELLS[@]}"; do [[ ${FG_CELLS[i]} == "$SGR_FG" ]] && PK_SFG=$i; done
+    for i in "${!BG_CELLS[@]}"; do [[ ${BG_CELLS[i]} == "$SGR_BG" ]] && PK_SBG=$i; done
+  fi
+}
+
+# file_value ENTRY -> RET: the value the entry has in the file, without the
+# staged changes.
+file_value() {
+  local i last=0
+  RET=""
+  for i in ${E_LINES[$1]}; do
+    if (( i > last )); then last=$i RET=${L_VAL[i]}; fi
+  done
+}
+
+# preview_set: show what the picker stands for in the list while it is open.
+preview_set() {
+  PV=()
+  if (( PK_TOUCHED )); then
+    picker_value
+    PV[$PK_REF]=$RET
+  fi
+  summarise "${E_GRP[PK_REF]}"
 }
 
 # open_picker ENTRY: edit one entry. Stages the result on Enter.
 open_picker() {
-  local ref=$1 old start v i record="" codes=(1 2 4 7 5) a dirty=1
+  local ref=$1 old v i record="" codes=(1 2 4 7 5) a dirty=1
   entry_values "$ref"
-  start=$EV_EFF
-  old=$start
+  PK_START=$EV_EFF
+  old=$PK_START
   (( ${#EV_LIST[@]} > 1 )) && old=$(IFS='|'; printf '%s' "${EV_LIST[*]}")
   old=${old//|/ | }
-  picker_load "$start"
+  file_value "$ref"
+  PK_FILE=$RET
+  PK_REF=$ref PK_OLD=$old
+  picker_load "$PK_START"
   PK_FIELD=0 PK_AT=0 T_MSG=""
-  PK_REF=$ref PK_OLD=$old T_FOCUS=picker T_CTX=picker
+  T_FOCUS=picker T_CTX=picker
   while :; do
     if (( dirty )); then
+      preview_set
       draw_screen
       T_MSG="" dirty=0
     fi
@@ -3376,10 +3653,13 @@ open_picker() {
           PK_RAW="" PK_TOUCHED=1
           if [[ $PK_ATTRS == *" $a "* ]]; then PK_ATTRS=${PK_ATTRS/" $a "/ }; else PK_ATTRS+="$a "; fi
         fi ;;
-      r) picker_load "$start" ;;
+      r)
+        # back to the colour in the file
+        picker_load "$PK_FILE"
+        [[ $PK_FILE != "$PK_START" ]] && PK_TOUCHED=1 ;;
       e)
         picker_value
-        if line_input "SGR code (numbers joined by ;): " "$RET"; then
+        if line_input " SGR code (numbers joined by ;): " "$RET"; then
           sgr_parse "$RET"
           if [[ -n $SGR_BAD ]]; then
             T_MSG="${C_R}Not a valid code: $RET${C_0}"
@@ -3390,11 +3670,12 @@ open_picker() {
           fi
         fi ;;
       enter) break ;;
-      esc|q|eof) T_FOCUS=list T_CTX=list; return 1 ;;
+      esc|q|eof) PV=(); T_FOCUS=list T_CTX=list; build_rows; return 1 ;;
     esac
   done
+  PV=()
   T_FOCUS=list T_CTX=list
-  (( PK_TOUCHED )) || return 1
+  if (( ! PK_TOUCHED )); then build_rows; return 1; fi
   picker_value
   v=$RET
   for i in ${E_LINES[ref]}; do
@@ -3466,8 +3747,10 @@ show_help() {
     "  Tab                     next field (foreground, background, attributes)"
     "  Space                   switch an attribute on or off"
     "  e                       type an SGR code by hand"
-    "  r                       back to the colour the entry had"
+    "  r                       back to the colour in the file"
     "  Enter                   accept          Esc   cancel"
+    "  The list shows the colour under the cursor while you choose. From $SPLIT_COLS"
+    "  columns on, the picker opens beside the list, otherwise in its place."
     ""
     "Nothing is written until you press s, look at the diff and confirm."
     "A backup is made next to the file before the first write."
