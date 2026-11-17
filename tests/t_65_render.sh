@@ -334,6 +334,10 @@ is "$RET" 0 "...after which nothing would change any more"
 count_changes " 0 1 2" 31
 is "$RET" 3 "every entry counts that would look different"
 undo_last
+count_changes " 2" "00;31"
+is "$RET" 0 "00;31 and 31 look the same: no change"
+stage_value " 0 1 2" 33
+undo_last
 is "${#UNDO[@]}|${#ST[@]}" "0|0" "one undo takes the whole section back"
 stage_value " 0" 32; stage_value " 0 1 2" 34
 undo_last
@@ -355,4 +359,9 @@ has "$RET" "3 entries" "...and how many entries it has"
 has "$RET" "1 of the entries have another colour" "...and how many differ"
 has "$RET" ">- archives     3   yellow" "the section's summary follows the picker"
 has "$RET" "example.gz        .gz / .GZ       * -> yellow" "...and so do all of its entries"
+T_FILTER=tar; build_rows
+frame_text
+has "$RET" "archives, matches only" "with a search on, the picker says only the matches change"
+has "$RET" "1 matching" "...and how many they are"
+T_FILTER=""
 PV=() PK_GRP=-1 T_FOCUS=list T_CTX=list; build_rows

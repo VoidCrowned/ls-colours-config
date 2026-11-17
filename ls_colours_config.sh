@@ -3494,6 +3494,7 @@ render_picker() {
   title=${E_LABEL[ref]} sec=${E_SEC[ref]}
   if (( PK_GRP >= 0 )); then
     title="all of ${G_TITLE[PK_GRP]}" sec="${G_N[PK_GRP]} entries"
+    [[ -n $T_FILTER ]] && title="${G_TITLE[PK_GRP]}, matches only" sec="${G_N[PK_GRP]} matching"
   fi
   (( ${#sec} > w / 3 )) && sec=${sec:0:$(( w / 3 ))}
   (( ${#title} > w - ${#sec} - 5 )) && title=${title:0:$(( w - ${#sec} - 5 > 0 ? w - ${#sec} - 5 : 0 ))}
@@ -3660,10 +3661,16 @@ stage_value() {
 # count_changes ENTRIES VALUE -> RET: how many of the entries would look
 # different with VALUE.
 count_changes() {
-  local e n=0
+  local e n=0 v want
+  plain_colour "$2"
+  want=$RET
   for e in $1; do
     entry_values "$e"
-    if (( ${#EV_LIST[@]} > 1 )) || [[ $EV_EFF != "$2" ]]; then n=$(( n + 1 )); fi
+    # 00;33 and 33 look the same and do not count as a change
+    for v in "${EV_LIST[@]}"; do
+      plain_colour "$v"
+      if [[ $RET != "$want" ]]; then n=$(( n + 1 )); break; fi
+    done
   done
   RET=$n
 }
@@ -3672,8 +3679,9 @@ count_changes() {
 ask_yes() {
   printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K ${C_Y}$1 [y/N]${C_0} "
   unset "FRAME[$(( ROWS - 1 ))]"
+  # Ctrl-C answers no and is left for the list, which then asks to quit
   while ! read_key 0.5; do
-    if (( INTR )); then INTR=0; return 1; fi
+    if (( INTR )); then return 1; fi
   done
   [[ $KEY == y || $KEY == Y ]]
 }
@@ -3779,7 +3787,8 @@ open_picker() {
       e=$RET
       PK_TOUCHED=1
       draw_screen
-      if ! ask_yes "Give all ${G_N[PK_GRP]} entries of ${G_TITLE[PK_GRP]} the colour $e? $a of them change."; then
+      if [[ -n $T_FILTER ]]; then c="the ${G_N[PK_GRP]} matching entries"; else c="all ${G_N[PK_GRP]} entries"; fi
+      if ! ask_yes "Give $c of ${G_TITLE[PK_GRP]} the colour $e? $a of them change."; then
         PV=()
         build_rows
         T_MSG="Nothing changed."
@@ -3793,7 +3802,8 @@ open_picker() {
   build_rows
   describe_value "$v"
   if (( PK_GRP >= 0 )); then
-    T_MSG="${G_TITLE[PK_GRP]}: $a entries set to $RET ($v), one step for undo"
+    T_MSG="${G_TITLE[PK_GRP]}: $a entries changed to $RET ($v), one step for undo"
+    [[ -n $T_FILTER ]] && T_MSG+="; only entries matching the search"
   else
     T_MSG="${E_LABEL[ref]} set to $RET ($v)"
   fi
