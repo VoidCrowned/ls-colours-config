@@ -3,7 +3,7 @@
 group "edit: entries"
 OPT_TERM=xterm OPT_CASE=0 OPT_256=0
 read_file "$FIX/pairs.dircolors"
-ST=() UNDO=()
+ST=()
 build_entries
 is "${E_LABEL[0]}|${E_NAME[0]}|${E_LINES[0]}" ".tar / .TAR|example.tar| 2 3" "a case pair is one entry that knows both lines"
 is "${#E_LABEL[@]}" 5 "pairs are listed once"
@@ -13,12 +13,43 @@ OPT_CASE=1; build_entries
 is "${#E_LABEL[@]}" 8 "--case-sensitive lists every spelling"
 is "${E_LABEL[1]}|${E_LINES[1]}" ".TAR| 3" "...each with its own line"
 OPT_CASE=0; build_entries
-T_FILTER="png"; T_CUR=0; build_rows
+F_LINE=() FOLD=() FOLD_F=() T_FOLD_DEFAULT=0 T_VIEW=section
+build_entries
+T_FILTER="png"; CUR_ID=""; build_rows
 is "${#ROW_KIND[@]}" 2 "search filters the list (heading plus one entry)"
-T_FILTER=""; build_rows
-is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeebhee" "a blank row separates the sections"
+T_FILTER=""; CUR_ID=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeehee" "each section is a heading row followed by its entries"
+is "$T_CUR" 1 "the cursor starts on the first entry"
 T_CUR=3; move_cursor 1
-is "$T_CUR" 6 "the cursor skips the blank row and the heading"
+is "$T_CUR|$CUR_ID" "4|h:images" "the cursor can rest on a heading"
+
+group "edit: folding"
+toggle_fold
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeeh" "a section folds away"
+is "$CUR_ID" "h:images" "...and the cursor stays on its heading"
+toggle_fold
+is "${#ROW_KIND[@]}" 7 "...and unfolds again"
+CUR_ID="e:1"; place_cursor
+is "$T_CUR" 2 "the cursor finds its entry"
+toggle_fold
+is "$T_CUR|$CUR_ID" "0|h:archives" "folding from an entry puts the cursor on the heading"
+fold_all 1; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "hh" "z folds every section"
+T_FILTER="png"; FOLD_F=(); CUR_ID=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "he" "a search unfolds the sections with matches and hides the others"
+T_FILTER=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "hh" "...and the folds are back when the search ends"
+fold_all 0; CUR_ID=""; build_rows
+is "${#ROW_KIND[@]}" 7 "Z unfolds every section"
+summarise 0
+is "${G_N[0]}|${G_MAJ[0]}|${G_DIFF[0]}" "3|31|1" "a section knows its most common colour and how many entries differ"
+ST[3]=35 ST[5]=37 ST[6]=33
+summarise 0
+is "${G_MAJ[0]}|${G_DIFF[0]}" "35|2" "without a clear majority the first of the most common colours is shown"
+ST=()
+F_LINE=(6) F_WHAT=(".zip is odd"); map_findings; build_rows
+is "${E_WARN[2]}|${G_WARN[0]}|${G_WARN[1]}" ".zip is odd|1|0" "findings of check are attached to their entries and counted per section"
+F_LINE=() F_WHAT=(); map_findings; build_rows
 
 group "edit: colour picker"
 picker_load "00;33"
@@ -52,17 +83,24 @@ is "$(LC_ALL=C LANG=C "$BASH" -c 'source "$1"; printf %s "$PK_MARK"' _ "$SCRIPT"
 # shellcheck disable=SC2016
 is "$(LC_ALL=C.UTF-8 "$BASH" -c 'source "$1"; printf %s "$PK_MARK"' _ "$SCRIPT")" "▐▌" "the mark is a solid square in a UTF-8 locale"
 
+group "edit: keys"
+keys() { local out=""; while read_key 0.2 && [[ $KEY != eof ]]; do out+="$KEY "; done; RET=$out; }
+keys < <(printf '\033q\033\n\033[Aj')
+is "$RET" "esc q esc enter up j " "a key typed right after Esc is not lost"
+KEY_NEXT=""
+
 group "edit: in a terminal"
 run edit "$FIX/pairs.dircolors" </dev/null
 is "$RC" 2 "refuses to start without a terminal"
 if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
-  # keys ARGS -- KEY...: run edit in a pseudo-terminal, one key group every 0.4 s
+  # keys ARGS -- KEY...: run edit in a pseudo-terminal, one key group every
+  # 0.4 s; an editor that does not quit is stopped after 40 s (status 124)
   tui() {
     local args=() k
     while [[ $1 != -- ]]; do args+=("$1"); shift; done
     shift
-    OUT=$({ sleep 0.6; for k in "$@"; do printf '%b' "$k"; sleep 0.4; done; } |
-      TERM=xterm script -qec "stty rows 30 cols 100; '$BASH' '$SCRIPT' edit ${args[*]}" /dev/null 2>&1)
+    OUT=$({ sleep 1; for k in "$@"; do printf '%b' "$k"; sleep 0.4; done; } |
+      TERM=xterm timeout 40 script -qec "stty rows 30 cols 100; '$BASH' '$SCRIPT' edit ${args[*]}" /dev/null 2>&1)
     RC=$?
   }
   fresh pairs.dircolors
@@ -83,10 +121,50 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   is "$(cat "$F")" "$before" "declining the review writes nothing"
   tui "$F" --dry-run -- '\r' 'l' '\r' 's' '\n' 'q' 'y'
   is "$(cat "$F")" "$before" "--dry-run never writes"
-  tui "$F" -- '\r' 'l' '\r' '\003'
-  is "$RC" 130 "Ctrl-C ends the editor"
+  # the terminal shrinks and grows again while the picker is open
+  OUT=$({ sleep 0.8; printf '\r'; sleep 0.5; printf 'l'; sleep 3.6; printf '\033'; sleep 0.5; printf 'q'; sleep 0.3; printf 'y'; } |
+    TERM=xterm timeout 40 script -qec "stty rows 30 cols 110; (sleep 1.6; stty cols 80 rows 24 </dev/tty; sleep 1; stty cols 30 rows 12 </dev/tty; sleep 1; stty cols 110 rows 30 </dev/tty) </dev/null & exec '$BASH' '$SCRIPT' edit '$F'" /dev/null 2>&1)
+  RC=$?
+  # the output is long, and the texts looked for are each written in one piece
+  has "$OUT" "Foreground" "resizing: the picker is drawn"
+  has "$OUT" "too small" "...a terminal that gets too small shows a note"
+  is "$RC|$(cat "$F")" "0|$before" "...Esc still cancels and nothing is written"
+  tui "$F" -- '\003'
+  is "$RC" 0 "Ctrl-C without changes quits at once"
+  has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"
+  tui "$F" -- '\r' 'l' '\r' '\003' 'n' 'j' '\003' '\003'
+  has "$OUT" "Quit without saving?" "Ctrl-C with unsaved changes asks"
+  is "$RC" 0 "...n stays, a second Ctrl-C at the question quits"
   has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"
   is "$(cat "$F")" "$before" "...without writing"
+  tui "$F" -- '\r' 'l' '\r' '\r' '\003' 'y'
+  has "$OUT" "Quit without saving?" "Ctrl-C in the picker closes it and asks too"
+  is "$RC|$(cat "$F")" "0|$before" "...y quits without writing"
+  tui "$F" -- '\r' 'l' 'q' 'q'
+  is "$RC|$(cat "$F")" "0|$before" "q in the picker cancels; nothing was staged, so q in the list quits at once"
+  tui "$F" -- '\r' '?' 'x' '\033' 'q'
+  has "$OUT" "Keys in the list" "? opens the help from the picker"
+  is "$RC" 0 "...and the editor carries on afterwards"
+
+  # Enter on the heading of the archives (the cursor starts on the first
+  # entry, k goes up to it), one colour to the right, accept, confirm
+  # (the section was not of one colour), save
+  fresh pairs.dircolors
+  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n' '\n' 'q'
+  is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 32${NL}.GZ 32${NL}.zip 32" "a whole section gets one colour"
+  fresh pairs.dircolors
+  before=$(cat "$F")
+  tui "$F" -- 'k' '\r' 'l' '\r' 'n' 'q'
+  is "$(cat "$F")" "$before" "...declining the question changes nothing"
+  has "$OUT" "Give all 3 entries of archives the colour green? 3 of them change." "...the question names the colour and how many entries change"
+
+  # palette view: up to the heading of red, one colour to the right (green),
+  # accept, save
+  fresh pairs.dircolors
+  tui "$F" -- 'v' 'k' '\r' 'l' '\r' 's' 'y\n' '\n' 'q' 'q'
+  has "$OUT" "palette view" "v switches to the palette view"
+  is "$RC" 0 "...the first q leaves it, the second quits"
+  is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 31${NL}.GZ 32${NL}.zip 32" "...where Enter on a colour recolours every entry of that colour"
 else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi
