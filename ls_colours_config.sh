@@ -2661,6 +2661,10 @@ build_entries() {
     E_LABEL+=("$label") E_NAME+=("$RET") E_LINES+=("$lines")
     E_SEC+=("${SEC_TITLE[${L_SEC[first]}]}")
   done
+  # the width of a name in columns: the longest, within reason
+  NAME_W=6
+  for i in "${!E_NAME[@]}"; do (( ${#E_NAME[i]} > NAME_W )) && NAME_W=${#E_NAME[i]}; done
+  (( NAME_W > 20 )) && NAME_W=20
   map_findings
 }
 
@@ -2767,24 +2771,73 @@ toggle_fold() {
 
 # cursor_group -> RET: the group of the row the cursor is on.
 cursor_group() {
-  local ref=${ROW_REF[T_CUR]:-}
   case ${ROW_KIND[T_CUR]:-} in
-    h) RET=$ref ;;
-    e) RET=${E_GRP[ref]} ;;
+    h) RET=${ROW_REF[T_CUR]} ;;
+    e) cur_entry; RET=${E_GRP[RET]} ;;
     *) return 1 ;;
   esac
 }
 
+# cur_entry -> RET: the entry under the cursor. Fails on a heading. A row of
+# the list holds one entry per column; T_COL is the column of the cursor
+# (kept within the row, which can be shorter than the rows above it).
+cur_entry() {
+  local -a cells=()
+  [[ ${ROW_KIND[T_CUR]:-} == e ]] || return 1
+  read -r -a cells <<<"${ROW_REF[T_CUR]}"
+  (( T_COL >= ${#cells[@]} )) && T_COL=$(( ${#cells[@]} - 1 ))
+  (( T_COL < 0 )) && T_COL=0
+  RET=${cells[T_COL]}
+}
+
+# build_rows: groups, their summaries and the rows of the list. Summaries
+# cost a look at every entry, so they are made here, on changes, and not
+# for every frame.
 build_rows() {
-  local g i
+  local g
   build_groups
+  for g in "${!G_TITLE[@]}"; do summarise "$g"; done
+  build_flow
+  place_cursor
+}
+
+# build_flow: the rows of the list for a pane FLOW_W wide. With T_MULTI and
+# room for two columns or more, the entries of an open section flow into
+# columns the way ls -C lists files: down the first column, then the next.
+# Otherwise each entry is a row with its pattern and colour in words.
+FLOW_W=0 FLOW_MULTI=0 NAME_W=12 CELL_W=17 T_MULTI=1 T_COL=0
+build_flow() {
+  local g n ncols nrows r k row
+  local -a ents=()
   ROW_KIND=() ROW_REF=()
+  # a cell: cursor bar, finding mark, change mark, the name, two spaces
+  CELL_W=$(( NAME_W + 5 ))
+  FLOW_MULTI=0
+  (( T_MULTI && (FLOW_W - 2) / CELL_W >= 2 )) && FLOW_MULTI=1
   for g in "${!G_TITLE[@]}"; do
-    summarise "$g"
     ROW_KIND+=(h) ROW_REF+=("$g")
     is_folded "$g" && continue
-    for i in ${G_ENTRIES[g]}; do ROW_KIND+=(e) ROW_REF+=("$i"); done
+    read -r -a ents <<<"${G_ENTRIES[g]}"
+    n=${#ents[@]}
+    (( n )) || continue
+    ncols=1
+    (( FLOW_MULTI )) && ncols=$(( (FLOW_W - 2) / CELL_W ))
+    (( ncols > n )) && ncols=$n
+    nrows=$(( (n + ncols - 1) / ncols ))
+    for (( r = 0; r < nrows; r++ )); do
+      row=""
+      for (( k = r; k < n; k += nrows )); do row+="${row:+ }${ents[k]}"; done
+      ROW_KIND+=(e) ROW_REF+=("$row")
+    done
   done
+}
+
+# reflow W: lay the list out again when its pane changed width. The cursor
+# stays on its entry.
+reflow() {
+  (( $1 == FLOW_W )) && return
+  FLOW_W=$1
+  build_flow
   place_cursor
 }
 
@@ -2797,11 +2850,18 @@ place_cursor() {
   (( n )) || return
   if [[ -z $want ]]; then
     [[ ${ROW_KIND[1]:-} == e ]] && T_CUR=1
-    T_TOP=0
+    T_TOP=0 T_COL=0
   fi
   if [[ $want == e:* ]]; then
     for (( r = 0; r < n; r++ )); do
-      if [[ ${ROW_KIND[r]} == e && ${ROW_REF[r]} == "${want#e:}" ]]; then T_CUR=$r; return; fi
+      if [[ ${ROW_KIND[r]} == e && " ${ROW_REF[r]} " == *" ${want#e:} "* ]]; then
+        # the column is the number of entries in front of it
+        RET=" ${ROW_REF[r]} "
+        RET=${RET%%" ${want#e:} "*}
+        RET=${RET//[!\ ]/}
+        T_CUR=$r T_COL=${#RET}
+        return
+      fi
     done
     g=${E_GRP[${want#e:}]:-}
     [[ -n $g ]] && want="h:${G_TITLE[g]}"
@@ -2815,10 +2875,9 @@ place_cursor() {
 }
 
 remember_cursor() {
-  local ref=${ROW_REF[T_CUR]:-}
   case ${ROW_KIND[T_CUR]:-} in
-    e) CUR_ID="e:$ref" ;;
-    h) CUR_ID="h:${G_TITLE[ref]}" ;;
+    e) cur_entry; CUR_ID="e:$RET" ;;
+    h) CUR_ID="h:${G_TITLE[${ROW_REF[T_CUR]}]}" ;;
     *) CUR_ID="" ;;
   esac
 }
@@ -2838,12 +2897,39 @@ entry_values() {
 }
 
 # move_cursor DELTA: move by DELTA rows; headings are rows like any other.
+# In columns, moving down past the end of a shorter column goes on to the
+# next heading.
 move_cursor() {
-  local total=${#ROW_KIND[@]}
+  local total=${#ROW_KIND[@]} t
+  local -a cells=()
   (( total )) || return
-  T_CUR=$(( T_CUR + $1 ))
-  (( T_CUR >= total )) && T_CUR=$(( total - 1 ))
-  (( T_CUR < 0 )) && T_CUR=0
+  cur_entry
+  t=$(( T_CUR + $1 ))
+  (( t >= total )) && t=$(( total - 1 ))
+  (( t < 0 )) && t=0
+  if (( $1 > 0 && FLOW_MULTI )) && [[ ${ROW_KIND[t]} == e && ${ROW_KIND[T_CUR]} == e ]]; then
+    read -r -a cells <<<"${ROW_REF[t]}"
+    if (( T_COL >= ${#cells[@]} )); then
+      while (( t < total - 1 )) && [[ ${ROW_KIND[t]} == e ]]; do t=$(( t + 1 )); done
+      # the last section has no heading after it: stay
+      [[ ${ROW_KIND[t]} == e ]] && t=$T_CUR
+    fi
+  fi
+  T_CUR=$t
+  remember_cursor
+}
+
+# move_column DELTA: left or right across the columns of the list. Left from
+# the first column goes to the heading of the section.
+move_column() {
+  local -a cells=()
+  cur_entry || return
+  read -r -a cells <<<"${ROW_REF[T_CUR]}"
+  if (( T_COL + $1 < 0 )); then
+    cursor_group && CUR_ID="h:${G_TITLE[RET]}" && place_cursor
+    return
+  fi
+  (( T_COL + $1 < ${#cells[@]} )) && T_COL=$(( T_COL + $1 ))
   remember_cursor
 }
 
@@ -3004,8 +3090,10 @@ render_footer() {
                    "Esc q|cancel" "?|help" "e|type a code" "r|reset") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
-    *)      hints=("$GL_K_MOVE|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "q|quit" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+    *)      k=$GL_K_MOVE
+            (( FLOW_MULTI )) && k=$GL_K_ARROWS
+            hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
+                   "s|save" "q|quit" "m|columns" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -3100,6 +3188,11 @@ render_list() {
       LP_LEN[r]=$(( wt + 12 + ${#plain} ))
       continue
     fi
+    if (( FLOW_MULTI )); then
+      cells_row "$ref" "$(( idx == T_CUR ))"
+      LP_TXT[r]=$RET LP_LEN[r]=$RET2
+      continue
+    fi
     entry_values "$ref"
     name=${E_NAME[ref]:0:wn} label=${E_LABEL[ref]:0:wl}
     paint "$EV_EFF" "$name"
@@ -3122,20 +3215,62 @@ render_list() {
   done
 }
 
+# cells_row ENTRIES CURSOR -> RET the row, RET2 its width: entries side by
+# side, each a name in its colour with its marks in front. CURSOR is 1 on
+# the row of the cursor.
+cells_row() {
+  local e c=0 out="  " name bar warn mod n=0 pad
+  for e in $1; do
+    bar=" " warn=" " mod=" "
+    if (( $2 && c == T_COL )); then
+      if (( LIST_DIM )); then bar="${C_D}$GL_CUR${C_0}"; else bar="${C_B}${C_C}$GL_CUR${C_0}"; fi
+    fi
+    [[ -n ${E_WARN[e]:-} ]] && warn="${C_Y}$GL_WARN${C_0}"
+    entry_values "$e"
+    (( EV_MOD )) && mod="${C_B}${C_Y}*${C_0}"
+    name=${E_NAME[e]:0:NAME_W}
+    paint "$EV_EFF" "$name"
+    spaces "$(( CELL_W - 3 - ${#name} ))"; pad=$RET
+    paint "$EV_EFF" "$name"
+    out+="$bar$warn$mod$RET$pad"
+    c=$(( c + 1 )) n=$(( n + 1 ))
+  done
+  RET=$out RET2=$(( 2 + n * CELL_W ))
+}
+
 # info_line W -> RET: the row above the key hints: a message, what check says
 # about the row under the cursor, or the filter.
 info_line() {
-  local w=$1 ref=${ROW_REF[T_CUR]:-} text=""
+  local w=$1 ref="" text="" about="" plain
   (( w > 1 )) || { RET=""; return; }
   if [[ -n $T_MSG ]]; then
     RET=" ${T_MSG:0:$(( w - 1 ))}"
     return
   fi
   case ${ROW_KIND[T_CUR]:-} in
-    e) text=${E_WARN[ref]:-} ;;
-    h) (( ${G_WARN[ref]:-0} )) && text="check has findings for ${G_WARN[ref]} of these entries; unfold to see them" ;;
+    e)
+      cur_entry
+      ref=$RET
+      text=${E_WARN[ref]:-}
+      # in columns there is no room for the details on the row itself: the
+      # entry under the cursor is described here, with its name in plain
+      # text, which also helps when its colour is hard to read
+      if (( FLOW_MULTI )); then
+        entry_values "$ref"
+        row_text "$ref" "$w"
+        strip_sgr "$RET"
+        about="${E_NAME[ref]}  ${E_LABEL[ref]}  $RET"
+      fi ;;
+    h)
+      ref=${ROW_REF[T_CUR]}
+      (( ${G_WARN[ref]:-0} )) && text="check has findings for ${G_WARN[ref]} of these entries; unfold to see them" ;;
   esac
-  if [[ -n $text ]]; then
+  if [[ -n $about ]]; then
+    plain=" $about"
+    RET=" ${C_D}$about${C_0}"
+    if [[ -n $text ]]; then plain+="   $GL_WARN $text"; RET+="   ${C_Y}$GL_WARN $text${C_0}"; fi
+    if (( ${#plain} > w )); then plain=${plain:0:w}; RET="${C_D}$plain${C_0}"; fi
+  elif [[ -n $text ]]; then
     text="$GL_WARN $text"
     RET=" ${C_Y}${text:0:$(( w - 1 ))}${C_0}"
   elif [[ -n $T_FILTER ]]; then
@@ -3197,6 +3332,7 @@ compose_frame() {
       lw=$(( COLS - PANE_R - 1 ))
       (( lw > LIST_W )) && lw=$LIST_W
       rw=$(( COLS - lw - 1 ))
+      reflow "$lw"
       if (( OPT_256 )); then (( rw > PANE_R_256 )) && rw=$PANE_R_256
       else (( rw > PANE_R )) && rw=$PANE_R
       fi
@@ -3224,6 +3360,7 @@ compose_frame() {
     *)
       rule "$COLS"; line="${C_D}$RET${C_0}"
       buf+="${ROW_AT}2${ROW_TXT}$line"
+      reflow "$COLS"
       render_list "$COLS" "$h"
       for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}"; done
       buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line" ;;
@@ -3231,7 +3368,7 @@ compose_frame() {
   info_line "$COLS"
   buf+="${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}$RET"
   case ${ROW_KIND[T_CUR]:-} in
-    e) pos="${E_ORD[${ROW_REF[T_CUR]}]}/$T_TOTAL" ;;
+    e) cur_entry; pos="${E_ORD[RET]}/$T_TOTAL" ;;
     h) pos="$T_TOTAL entries" ;;
   esac
   [[ $T_FOCUS == picker ]] && pos=""
@@ -3861,13 +3998,17 @@ help_lines() {
   hk() { spaces "$(( 22 - ${#1} ))"; HELP+=("  $1$RET $2"); }
   HELP+=("Keys in the list")
   hk "$m, j k" "move one row"
+  hk "$l $r, h l" "move across the columns, when there are several"
   hk "PgUp PgDn" "move one page"
   hk "Home End, g G" "first or last row"
-  hk "$n, l, $r" "edit the colour of the entry"
+  hk "$n" "edit the colour of the entry"
+  hk "l, $r" "the same, when the list has one column"
   hk "$sp" "fold or unfold the section"
   hk "$n on a heading" "give every entry of the section one colour (one step for undo)"
   hk "l, $r on a heading" "unfold it, or go to its first entry when it is open"
   hk "h, $l" "fold the section on a heading, or go to the heading from an entry"
+  hk "" "(in the first column, when there are several)"
+  hk "m" "several columns of names, or one column with pattern and colour"
   hk "z / Z" "fold every section / unfold every section"
   hk "/" "search (pattern, sample name or section); Esc clears"
   hk "x" "show the codes instead of the colours in words"
@@ -4006,24 +4147,30 @@ cmd_edit() {
       end|G)   move_cursor "${#ROW_KIND[@]}" ;;
       enter)
         case ${ROW_KIND[T_CUR]:-} in
-          e) open_picker "${ROW_REF[T_CUR]}" ;;
+          e) cur_entry && open_picker "$RET" ;;
           h)
             # the whole group
             RET=${G_ENTRIES[${ROW_REF[T_CUR]}]# }
             open_picker "${RET%% *}" "${ROW_REF[T_CUR]}" ;;
         esac ;;
       l|right)
-        # on a heading: unfold, then step into the group
+        # on a heading: unfold, then step into the group; on an entry: the
+        # next column, or with one column the picker
         case ${ROW_KIND[T_CUR]:-} in
-          e) open_picker "${ROW_REF[T_CUR]}" ;;
-          h) if is_folded "${ROW_REF[T_CUR]}"; then toggle_fold; else move_cursor 1; fi ;;
+          e) if (( FLOW_MULTI )); then move_column 1; else cur_entry && open_picker "$RET"; fi ;;
+          h) if is_folded "${ROW_REF[T_CUR]}"; then toggle_fold; else T_COL=0; move_cursor 1; fi ;;
         esac ;;
       h|left)
-        # on a heading: fold; on an entry: back to its heading
+        # on a heading: fold; on an entry: the column to the left, or from
+        # the first one the heading
         case ${ROW_KIND[T_CUR]:-} in
-          e) cursor_group && CUR_ID="h:${G_TITLE[RET]}" && place_cursor ;;
+          e) move_column -1 ;;
           h) is_folded "${ROW_REF[T_CUR]}" || toggle_fold ;;
         esac ;;
+      m)
+        T_MULTI=$(( ! T_MULTI ))
+        build_flow
+        place_cursor ;;
       space)   toggle_fold ;;
       z)       cursor_group && CUR_ID="h:${G_TITLE[RET]}"; fold_all 1; build_rows ;;
       Z)       fold_all 0; build_rows ;;
