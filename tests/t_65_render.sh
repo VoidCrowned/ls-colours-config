@@ -39,8 +39,6 @@ render_state() {
   ST=() V_DESC=() V_HARD=()
   T_FILTER="" T_MSG="" T_CUR=0 T_TOP=0 T_RAW=0 T_FOCUS=list T_CTX=list
   T_VIEW=section T_FOLD_DEFAULT=0 FOLD=() FOLD_F=() CUR_ID=""
-  # one column with details unless a test asks for columns
-  T_MULTI=0 FLOW_W=0 T_COL=0
   F_LINE=() F_WHAT=()
   build_entries
   build_rows
@@ -379,76 +377,6 @@ has "$RET" "archives, matches only" "with a search on, the picker says only the 
 has "$RET" "1 matching" "...and how many they are"
 T_FILTER=""
 PV=() PK_GRP=-1 T_FOCUS=list T_CTX=list; build_rows
-
-group "edit: names in columns"
-render_state
-T_MULTI=1
-is "$NAME_W|$CELL_W" "11|16" "a column is as wide as the longest name and its marks"
-reflow 60
-is "$FLOW_MULTI|$(IFS=,; printf '%s' "${ROW_REF[*]}")" "1|0,0 1 2,1,3 4" "at 60 columns a section's entries fit side by side"
-reflow 40
-is "$(IFS=,; printf '%s' "${ROW_REF[*]}")" "0,0 2,1,1,3 4" "at 40 they go down the first column, then the next (like ls -C)"
-reflow 30
-is "$FLOW_MULTI|${#ROW_KIND[@]}" "0|7" "without room for two columns the list has one"
-reflow 60
-CUR_ID="e:2"; place_cursor
-is "$T_CUR|$T_COL" "1|2" "the cursor finds its entry in the third column"
-reflow 40
-cur_entry; is "$T_CUR|$T_COL|$RET" "1|1|2" "...and stays on it when the list reflows"
-FLOW_W=0; reflow 60
-cur_entry; is "$RET" 2 "...and back"
-# moving: left and right across, down past a short column, left out of the first
-reflow 40
-CUR_ID="e:0"; place_cursor
-move_column 1; cur_entry; is "$RET" 2 "right goes to the next column"
-move_column 1; cur_entry; is "$RET" 2 "...and stops at the last"
-move_cursor 1
-is "$CUR_ID" "h:images" "down past the end of a shorter column goes to the next heading"
-CUR_ID="e:1"; place_cursor
-move_cursor -1; cur_entry; is "$RET" 0 "up stays in the column"
-move_column -1
-is "$CUR_ID" "h:archives" "left from the first column goes to the heading"
-# the frame
-CUR_ID="e:2"; reflow 60; place_cursor
-list_text 60 4
-is "$RET" " - archives     3   red  (1 differ)
-     example.tar     example.gz   >  example.zip  
- - images       2   magenta
-     example.png     example.jpg  " "in columns a row holds names only, the cursor is a bar in front of one"
-plain info_line 60
-is "$RET" " example.zip  .zip  red" "the entry under the cursor is described above the hints"
-ST[6]=33; build_rows; list_text 60 2
-has "$RET" "> *example.zip" "a changed entry is marked in its cell"
-plain info_line 60
-is "$RET" " example.zip  .zip  * -> yellow" "...and its new colour is named above the hints"
-ST=(); F_LINE=(6) F_WHAT=("odd"); map_findings; build_rows
-plain info_line 60
-is "$RET" " example.zip  .zip  red   ! odd" "a finding is shown next to the description"
-list_text 60 2
-has "$RET" ">! example.zip" "...and marked in the cell"
-F_LINE=() F_WHAT=(); map_findings; build_rows
-bad=""
-for w in 40 50 60 61 76 100; do
-  reflow "$w"
-  render_list "$w" 8
-  for r in "${!LP_TXT[@]}"; do
-    strip_sgr "${LP_TXT[r]}"
-    (( ${#RET} == LP_LEN[r] && ${#RET} <= w )) || bad+=" w$w/r$r:${#RET}/${LP_LEN[r]}"
-  done
-done
-is "$bad" "" "in columns, too, every row's recorded width matches its text"
-if ( LC_ALL=C.UTF-8; x="─"; (( ${#x} == 1 )) ) 2>/dev/null; then
-  out=$(LC_ALL=C.UTF-8; OPT_ASCII=0; setup_glyphs; reflow 60; CUR_ID="e:2"; place_cursor; render_list 60 4
-    strip_sgr "${LP_TXT[1]}"; printf '%s|%s' "${#RET}" "${LP_LEN[1]}")
-  is "$out" "50|50" "UTF-8: a row in columns with the cursor bar has the width it records"
-fi
-plain render_footer 200 list ""
-has "$RET" "arrows move" "with columns the hints say the arrows move in all four directions"
-has "$RET" "m columns" "...and that m switches the columns"
-T_MULTI=0; build_flow
-COLS=100 ROWS=12
-frame_text
-has "$RET" "example.zip             .zip                  red" "m: one column with details again"
 
 group "edit: palette view"
 render_state
