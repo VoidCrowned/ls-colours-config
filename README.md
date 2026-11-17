@@ -2,8 +2,20 @@
 
 My terminal tool for the file that decides the colours of `ls`: it previews, checks, repairs and edits a GNU `dircolors` configuration. One bash script, no dependencies beyond bash and GNU coreutils.
 
-<p align="center"><img src="docs/edit_view.png" alt="The editor with the picker beside the list: the file types section unfolded, each entry in its colour with the colour in words, and on the right the new and old sample, the foreground and background palettes and the attribute switches" width="830"></p>
-<p align="center"><img src="docs/section_view.png" alt="The section view: one row per section with its number of entries, its main colour and how many entries differ, the file types section unfolded" width="410"> <img src="docs/palette_view.png" alt="The palette view: the entries grouped by colour, most used first, a few groups unfolded to show their entries and sections" width="410"></p>
+## The editor
+<details close><summary>(Click to expand)</summary>
+<br>
+<p align="center"><img src="docs/edit_view.png" alt="The editor with the picker beside the list: the file types section unfolded, each entry in its colour with the colour in words, and on the right the new and old sample, the foreground and background palettes and the attribute switches"></p></details>
+
+## Select from list/categories
+<details close><summary>(Click to expand)</summary>
+<br>
+<p align="center"><img src="docs/section_view.png" alt="The section view: one row per section with its number of entries, its main colour and how many entries differ, the file types section unfolded"></p></details>
+
+## Select by palette grouping
+<details close><summary>(Click to expand)</summary>
+<br>
+<p align="center"><img src="docs/palette_view.png" alt="The palette view: the entries grouped by colour, most used first, a few groups unfolded to show their entries and sections"></p></details>
 
 ## Install
 
