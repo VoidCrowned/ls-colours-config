@@ -114,14 +114,14 @@ render_state
 
 group "edit: header and key hints"
 plain render_header 70
-is "$RET" " ls_colours_config.sh - pairs.dircolors      section view - 0 unsaved " "a narrow header keeps the file name and the view"
+is "$RET" " ls_colours_config.sh - pairs.dircolors - section view - 0 unsaved    " "a narrow header keeps the file name and the view"
 plain render_header 120
-is "$RET" " ls_colours_config.sh - pairs.dircolors                            16 colours - pairs joined - section view - 0 unsaved " "a wide header shows the settings"
+is "$RET" " ls_colours_config.sh - pairs.dircolors - 16 colours - pairs joined - section view - 0 unsaved                          " "a wide header shows the settings, straight after the file name"
 plain render_header 90
-is "$RET" " ls_colours_config.sh - pairs.dircolors           pairs joined - section view - 0 unsaved " "...dropping the least important first"
+is "$RET" " ls_colours_config.sh - pairs.dircolors - pairs joined - section view - 0 unsaved         " "...dropping the least important first"
 OPT_DRY=1 FILE=/a/rather/long/path/to/the/dircolors/file
 plain render_header 60
-is "$RET" " /a/rather/long/path/to  dry run - section view - 0 unsaved " "a dry run and the view stay; the tool's name goes and a long file name is cut"
+is "$RET" " /a/rather/long/path/t - dry run - section view - 0 unsaved " "a dry run and the view stay; the tool's name goes and a long file name is cut"
 OPT_DRY=0 FILE=pairs.dircolors
 ST[2]=33
 plain render_header 90
@@ -138,7 +138,7 @@ has "$RET" "Esc cancel" "...and so has the search"
 group "edit: the whole screen"
 COLS=60 ROWS=12
 frame_text
-is "$RET" " pairs.dircolors                   section view - 0 unsaved 
+is "$RET" " pairs.dircolors - section view - 0 unsaved                 
 ------------------------------------------------------------
  - archives     3   red  (1 differ)
 >    example.tar       .tar / .TAR     red

@@ -3046,11 +3046,11 @@ rule() {
   RET=${RET// /$GL_H}
 }
 
-# render_header W -> RET: tool and file on the left, the state on the right.
+# render_header W -> RET: tool and file, then the state, as one line.
 render_header() {
-  local w=$1 left right="" tail plain n=${#ST[@]} room i p
+  local w=$1 left right="" tail plain n=${#ST[@]} room i p sep=" $GL_DOT "
   local -a parts=()
-  left=" $PROG $GL_DOT $FILE"
+  left=" $PROG$sep$FILE"
   # the settings, least important first: on a narrow screen they go one by
   # one, so that the view, a search and a dry run stay in sight longest
   if (( OPT_256 )); then parts+=("256 colours"); else parts+=("16 colours"); fi
@@ -3064,20 +3064,20 @@ render_header() {
   # search, a dry run and the view go
   for (( i = 0; i <= ${#parts[@]}; i++ )); do
     right=""
-    for p in "${parts[@]:i}"; do right+="$p $GL_DOT "; done
-    (( i < 2 && ${#left} + ${#right} + ${#tail} + 2 > w )) && continue
-    (( i >= 2 && 20 + ${#right} + ${#tail} + 2 > w )) && continue
+    for p in "${parts[@]:i}"; do right+="$p$sep"; done
+    (( i < 2 && ${#left} + ${#sep} + ${#right} + ${#tail} + 1 > w )) && continue
+    (( i >= 2 && 20 + ${#sep} + ${#right} + ${#tail} + 1 > w )) && continue
     break
   done
-  plain="$right$tail "
-  room=$(( w - ${#plain} - 2 ))
+  plain="$sep$right$tail "
+  room=$(( w - ${#plain} ))
   (( room < 0 )) && room=0
   # short of room, the file name matters more than the name of the tool
   (( ${#left} > room )) && left=" $FILE"
   left=${left:0:room}
   spaces "$(( w - ${#left} - ${#plain} ))"
   if (( n )); then tail="${C_B}${C_Y}$tail${C_0}"; else tail="${C_D}$tail${C_0}"; fi
-  RET="${C_B}$left${C_0}$RET${C_D}$right${C_0}$tail "
+  RET="${C_B}$left${C_0}${C_D}$sep$right${C_0}$tail $RET"
 }
 
 # render_footer W CONTEXT POSITION -> RET: the keys that work right now, the
