@@ -42,10 +42,10 @@ is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "hh" "...and the folds are back when 
 fold_all 0; CUR_ID=""; build_rows
 is "${#ROW_KIND[@]}" 7 "Z unfolds every section"
 summarise 0
-is "${G_N[0]}|${G_MAJ[0]}|${G_DIFF[0]}|${G_KINDS[0]}" "3|31|1|0" "a section knows its most common colour and how many entries differ"
-ST[3]=35 ST[4]=36 ST[5]=37 ST[6]=33
+is "${G_N[0]}|${G_MAJ[0]}|${G_DIFF[0]}" "3|31|1" "a section knows its most common colour and how many entries differ"
+ST[3]=35 ST[5]=37 ST[6]=33
 summarise 0
-is "${G_KINDS[0]}" 3 "without a majority the section is mixed"
+is "${G_MAJ[0]}|${G_DIFF[0]}" "35|2" "without a clear majority the first of the most common colours is shown"
 ST=()
 F_LINE=(6) F_WHAT=(".zip is odd"); map_findings; build_rows
 is "${E_WARN[2]}|${G_WARN[0]}|${G_WARN[1]}" ".zip is odd|1|0" "findings of check are attached to their entries and counted per section"

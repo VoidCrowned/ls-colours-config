@@ -57,11 +57,11 @@ is "$RET" " - archives     3   red  (1 differ)
 hasnt "${LP_TXT[1]}" "${ESC}[7m" "the cursor row is not drawn in reverse video"
 ST[2]=33 ST[3]=33; build_rows
 list_text 60 2
-is "$RET" " - archives     3   mixed, 3 colours
+is "$RET" " - archives     3   yellow  (2 differ)
 >    example.tar       .tar / .TAR     * -> yellow" "a changed row is marked and shows the new colour"
 T_RAW=1
 list_text 60 3
-is "$RET" " - archives     3   mixed, 3 colours
+is "$RET" " - archives     3   33  (2 differ)
 >    example.tar       .tar / .TAR     * -> 33
      example.gz        .gz / .GZ       31 | 32  differs" "x shows the codes instead"
 T_RAW=0 ST=()
@@ -71,6 +71,23 @@ has "$RET" "     example.zip exam  .zip            * -> black" "a name that is h
 ST=(); build_rows
 list_text 30 4
 widest "$RET"; ok "rows are cut to the width of the pane" test "$RET" -le 30
+
+# every row knows its own width, which the layout relies on to place the
+# right-hand pane
+widths_ok() {
+  local w r bad=""
+  for w in 30 44 60 69 70 100; do
+    render_list "$w" 8
+    for r in "${!LP_TXT[@]}"; do
+      strip_sgr "${LP_TXT[r]}"
+      (( ${#RET} == LP_LEN[r] && ${#RET} <= w )) || bad+=" w$w/r$r:${#RET}/${LP_LEN[r]}"
+    done
+  done
+  printf '%s' "$bad"
+}
+ST[6]=30; F_LINE=(6) F_WHAT=("odd"); map_findings; build_rows
+is "$(widths_ok)" "" "each row's recorded width matches its text, at every width"
+F_LINE=() F_WHAT=(); map_findings; ST=(); build_rows
 
 group "edit: folded sections and findings"
 CUR_ID="h:images"; place_cursor; toggle_fold
@@ -149,6 +166,7 @@ if ( LC_ALL=C.UTF-8; x="─"; (( ${#x} == 1 )) ) 2>/dev/null; then
   has "$out" "▌    example.tar" "UTF-8: the cursor is a bar"
   has "$out" "────────────" "UTF-8: rules are lines"
   is "$(LC_ALL=C.UTF-8; widest "$out"; printf '%s' "$RET")" 60 "UTF-8: widths are counted in characters, not bytes"
+  is "$(LC_ALL=C.UTF-8; OPT_ASCII=0; setup_glyphs; widths_ok)" "" "UTF-8: each row's recorded width matches its text"
   out=$(LC_ALL=C.UTF-8; OPT_ASCII=1; setup_glyphs; frame_text; printf '%s' "$RET")
   hasnt "$out" "▌" "--ascii wins over the locale"
 else

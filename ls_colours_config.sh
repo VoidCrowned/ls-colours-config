@@ -2639,7 +2639,7 @@ build_entries() {
 #
 # The entries are shown in groups: the sections of the file. A group is a
 # heading row that can be folded away, followed by its entries.
-declare -a G_TITLE=() G_ENTRIES=() G_N=() G_MAJ=() G_DIFF=() G_KINDS=() G_WARN=()
+declare -a G_TITLE=() G_ENTRIES=() G_N=() G_MAJ=() G_DIFF=() G_WARN=()
 declare -a E_GRP=() E_ORD=() E_WARN=()
 declare -A FOLD=() FOLD_F=()         # fold state by view and title; _F while a filter is on
 T_VIEW=section T_FOLD_DEFAULT=0 T_TOTAL=0 GW_TITLE=8
@@ -2701,10 +2701,6 @@ summarise() {
     [[ -n ${E_WARN[i]:-} ]] && warn=$(( warn + 1 ))
   done
   G_N[g]=$total G_MAJ[g]=${spelt[$best]:-} G_DIFF[g]=$(( total - bestn )) G_WARN[g]=$warn
-  # without a colour that more than half of the entries share, the group is
-  # simply mixed
-  G_KINDS[g]=0
-  (( bestn * 2 <= total )) && G_KINDS[g]=${#tally[@]}
 }
 
 # is_folded GROUP. A search starts with every group that matches unfolded.
@@ -3053,9 +3049,7 @@ render_list() {
       printf -v cell '%4d' "${G_N[ref]}"
       if (( T_RAW )); then RET=${G_MAJ[ref]}; else describe_value "${G_MAJ[ref]}"; fi
       plain=$RET tail="${C_D}$RET${C_0}"
-      if (( G_KINDS[ref] )); then
-        plain="mixed, ${G_KINDS[ref]} colours" tail="${C_D}$plain${C_0}"
-      elif (( G_DIFF[ref] )); then
+      if (( G_DIFF[ref] )); then
         plain+="  (${G_DIFF[ref]} differ)" tail+="  ${C_Y}(${G_DIFF[ref]} differ)${C_0}"
       fi
       if (( G_WARN[ref] )); then
@@ -3086,7 +3080,7 @@ render_list() {
     [[ -n ${E_WARN[ref]:-} ]] && warn="${C_Y}$GL_WARN${C_0}"
     LP_TXT[r]="$gutter  $warn $cell$pad1  $label$pad2  $RET"
     # shellcheck disable=SC2034
-    LP_LEN[r]=$(( wn + wl + 7 + RET2 ))
+    LP_LEN[r]=$(( wn + wl + 9 + RET2 ))
   done
 }
 
