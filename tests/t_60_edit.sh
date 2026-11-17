@@ -3,7 +3,7 @@
 group "edit: entries"
 OPT_TERM=xterm OPT_CASE=0 OPT_256=0
 read_file "$FIX/pairs.dircolors"
-ST=() UNDO=()
+ST=()
 build_entries
 is "${E_LABEL[0]}|${E_NAME[0]}|${E_LINES[0]}" ".tar / .TAR|example.tar| 2 3" "a case pair is one entry that knows both lines"
 is "${#E_LABEL[@]}" 5 "pairs are listed once"
@@ -143,7 +143,7 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   tui "$F" -- '\r' 'l' 'q' 'q'
   is "$RC|$(cat "$F")" "0|$before" "q in the picker cancels; nothing was staged, so q in the list quits at once"
   tui "$F" -- '\r' '?' 'x' '\033' 'q'
-  has "$OUT" "Keys in the colour picker" "? opens the help from the picker"
+  has "$OUT" "Keys in the list" "? opens the help from the picker"
   is "$RC" 0 "...and the editor carries on afterwards"
 
   # Enter on the heading of the archives (the cursor starts on the first
@@ -161,8 +161,9 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   # palette view: up to the heading of red, one colour to the right (green),
   # accept, save
   fresh pairs.dircolors
-  tui "$F" -- 'v' 'k' '\r' 'l' '\r' 's' 'y\n' '\n' 'q'
+  tui "$F" -- 'v' 'k' '\r' 'l' '\r' 's' 'y\n' '\n' 'q' 'q'
   has "$OUT" "palette view" "v switches to the palette view"
+  is "$RC" 0 "...the first q leaves it, the second quits"
   is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 31${NL}.GZ 32${NL}.zip 32" "...where Enter on a colour recolours every entry of that colour"
 else
   skip "editor in a pseudo-terminal" "needs the script command"

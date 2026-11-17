@@ -36,7 +36,7 @@ render_state() {
   setup_glyphs
   read_file "$FIX/pairs.dircolors"
   FILE=pairs.dircolors
-  ST=() UNDO=() V_DESC=() V_HARD=()
+  ST=() V_DESC=() V_HARD=()
   T_FILTER="" T_MSG="" T_CUR=0 T_TOP=0 T_RAW=0 T_FOCUS=list T_CTX=list
   T_VIEW=section T_FOLD_DEFAULT=0 FOLD=() FOLD_F=() CUR_ID=""
   # one column with details unless a test asks for columns
@@ -336,21 +336,27 @@ is "${RET%% *([[:space:]])}" " Enter apply   Esc cancel" "while a code or a sear
 group "edit: a whole section at once"
 render_state
 stage_value " 0 1 2" 33
-is "${#UNDO[@]}|${ST[2]}|${ST[3]}|${ST[4]}|${ST[5]}|${ST[6]}" "1|33|33|33|33|33" "colouring a section stages every line of every entry as one step"
+is "${ST[2]}|${ST[3]}|${ST[4]}|${ST[5]}|${ST[6]}" "33|33|33|33|33" "colouring a section stages every line of every entry"
 count_changes " 0 1 2" 33
 is "$RET" 0 "...after which nothing would change any more"
 count_changes " 0 1 2" 31
 is "$RET" 3 "every entry counts that would look different"
-undo_last
+ST=()
 count_changes " 2" "00;31"
 is "$RET" 0 "00;31 and 31 look the same: no change"
-stage_value " 0 1 2" 33
-undo_last
-is "${#UNDO[@]}|${#ST[@]}" "0|0" "one undo takes the whole section back"
-stage_value " 0" 32; stage_value " 0 1 2" 34
-undo_last
-is "${#UNDO[@]}|${ST[2]}|${ST[3]}|${ST[4]:-none}" "1|32|32|none" "...and leaves the change before it in place"
-undo_last
+build_rows
+stage_value " 0 1 2" 33; build_rows
+CUR_ID="h:archives"; place_cursor
+undo_here
+is "${#ST[@]}|$T_MSG" "0|archives: back to the colours in the file (3 entries)" "u on a heading undoes the whole section"
+stage_value " 0 1 2" 33; stage_value " 3" 32; build_rows
+CUR_ID="e:1"; place_cursor
+undo_here
+is "${ST[2]}|${ST[4]:-none}|${ST[5]:-none}|${ST[9]}" "33|none|none|32" "u on an entry undoes just that entry, both of its spellings"
+undo_here
+is "$T_MSG" ".gz / .GZ has no changes to undo." "...and says so when there is nothing to undo"
+revert_count; is "$RET" 3 "U counts the entries it would undo"
+ST=(); build_rows
 # the picker for a section: title, entry count, how many differ, live preview
 CUR_ID="h:archives"; build_rows
 summarise 0
@@ -470,11 +476,11 @@ PV=()
 stage_value " 2" 32; build_rows
 is "${G_TITLE[*]}|${G_ENTRIES[0]}" "32 35 31| 1 2" "on accept it moves to the group of its new colour"
 cur_entry; is "$RET" 2 "...and the cursor goes with it"
-undo_last; build_rows
+ST=(); build_rows
 stage_value "${G_ENTRIES[0]}" 35; build_rows
-is "${G_TITLE[*]}|${#UNDO[@]}" "35 32|1" "recolouring a whole colour merges its group into another, one step for undo"
-undo_last; build_rows
-is "${G_TITLE[*]}" "31 35 32" "...and undo splits it again"
+is "${G_TITLE[*]}" "35 32" "recolouring a whole colour merges its group into another"
+CUR_ID="h:35"; place_cursor; undo_here
+is "${G_TITLE[*]}" "31 35 32" "...and u on that group splits it again"
 T_FILTER=png; FOLD_F=(); CUR_ID=""; build_rows
 is "${G_TITLE[*]}|${ROW_KIND[*]}" "35|h e" "a search in the palette shows only the colours with matches"
 T_FILTER=""; build_rows
@@ -485,7 +491,7 @@ is "${ROW_KIND[*]}" "h e e e h e e" "...and the section view keeps its own folds
 T_VIEW=section
 
 group "edit: spellings of one colour"
-read_file "$FIX/spellings.dircolors"; ST=() UNDO=(); build_entries; F_LINE=(); map_findings
+read_file "$FIX/spellings.dircolors"; ST=(); build_entries; F_LINE=(); map_findings
 T_VIEW=palette; CUR_ID=""; build_rows
 is "${#G_TITLE[@]}|${G_N[0]}" "1|3" "01;35, 1;35 and 00;01;35 are one colour in the palette"
 T_VIEW=section; build_rows

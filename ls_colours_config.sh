@@ -2482,7 +2482,6 @@ cmd_fix() {
 declare -a E_LABEL=() E_NAME=() E_LINES=() E_SEC=()
 declare -a ROW_KIND=() ROW_REF=()    # visible rows: h heading (group), e entry
 declare -a ST=()                     # staged values by line number
-declare -a UNDO=()                   # one record per change
 declare -a EV_LIST=()                # distinct values of the entry at hand
 EV_EFF="" EV_MOD=0
 T_CUR=0 T_TOP=0 T_FILTER="" T_MSG="" RESIZED=0 INTR=0 KEY=""
@@ -2850,7 +2849,7 @@ build_rows() {
 # room for two columns or more, the entries of an open section flow into
 # columns the way ls -C lists files: down the first column, then the next.
 # Otherwise each entry is a row with its pattern and colour in words.
-FLOW_W=0 FLOW_MULTI=0 NAME_W=12 CELL_W=17 T_MULTI=1 T_COL=0
+FLOW_W=0 FLOW_MULTI=0 NAME_W=12 CELL_W=17 T_MULTI=0 T_COL=0
 build_flow() {
   local g n ncols nrows r k row
   local -a ents=()
@@ -3165,8 +3164,10 @@ render_footer() {
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
     *)      k=$GL_K_MOVE
             (( FLOW_MULTI )) && k=$GL_K_ARROWS
+            l="q|quit"
+            [[ $T_VIEW == palette ]] && l="Esc q|section view"
             hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "q|quit" "v|view" "m|columns" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+                   "s|save" "$l" "U|undo all" "v|view" "m|columns" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -3874,17 +3875,14 @@ preview_set() {
   if (( PK_GRP >= 0 )); then summarise "$PK_GRP"; else summarise "${E_GRP[PK_REF]}"; fi
 }
 
-# stage_value ENTRIES VALUE: give every line of the entries VALUE, as one
-# step that undo takes back as a whole.
+# stage_value ENTRIES VALUE: give every line of the entries VALUE.
 stage_value() {
-  local e i v=$2 record=""
+  local e i v=$2
   for e in $1; do
     for i in ${E_LINES[e]}; do
-      if [[ -n ${ST[i]+x} ]]; then record+="$i=V${ST[i]}$NL"; else record+="$i=U$NL"; fi
       if [[ $v == "${L_VAL[i]}" ]]; then unset "ST[$i]"; else ST[i]=$v; fi
     done
   done
-  [[ -n $record ]] && UNDO+=("${record%"$NL"}")
 }
 
 # count_changes ENTRIES VALUE -> RET: how many of the entries would look
@@ -3966,6 +3964,8 @@ open_picker() {
       KEY=esc
     fi
     dirty=1
+    # keys that are already waiting come first; the frame after them
+    [[ -z $KEY_NEXT ]] && read -t 0 && dirty=0
     case $KEY in
       \?)     show_help ;;
       up|k)    picker_move -1 0 ;;
@@ -4044,16 +4044,64 @@ open_picker() {
   return 0
 }
 
-undo_last() {
-  local n=${#UNDO[@]} line i
+# revert ENTRIES -> RET: drop the staged changes of the entries, so that
+# they have their colours from the file again; RET counts the entries.
+revert() {
+  local e i n=0 hit
+  for e in $1; do
+    hit=0
+    for i in ${E_LINES[e]}; do
+      if [[ -n ${ST[i]+x} ]]; then unset "ST[$i]"; hit=1; fi
+    done
+    n=$(( n + hit ))
+  done
+  RET=$n
+}
+
+# undo_here: u. Back to the colours in the file for the entry under the
+# cursor, or on a heading for every entry of the group.
+undo_here() {
+  local what
+  if cur_entry; then
+    what=${E_LABEL[RET]}
+    revert " $RET"
+  elif [[ ${ROW_KIND[T_CUR]:-} == h ]]; then
+    group_name "${ROW_REF[T_CUR]}"
+    what=$RET
+    revert "${G_ENTRIES[${ROW_REF[T_CUR]}]}"
+  else
+    return
+  fi
+  if (( RET )); then
+    T_MSG="$what: back to the colours in the file ($RET entries)"
+    build_rows
+  else
+    T_MSG="$what has no changes to undo."
+  fi
+}
+
+# undo_all: U. Every staged change goes, after a question.
+undo_all() {
+  local n
+  revert_count
+  n=$RET
   if (( ! n )); then T_MSG="Nothing to undo."; return; fi
-  while IFS= read -r line; do
-    i=${line%%=*}
-    if [[ ${line#*=} == U ]]; then unset "ST[$i]"; else ST[i]=${line#*=V}; fi
-  done <<<"${UNDO[n-1]}"
-  unset "UNDO[$(( n - 1 ))]"
-  build_rows
-  T_MSG="Undone."
+  if ask_yes "Undo all changes ($n entries)?"; then
+    ST=()
+    build_rows
+    T_MSG="All changes undone."
+  fi
+}
+
+# revert_count -> RET: how many entries have staged changes.
+revert_count() {
+  local e i n=0
+  for e in "${!E_LINES[@]}"; do
+    for i in ${E_LINES[e]}; do
+      if [[ -n ${ST[i]+x} ]]; then n=$(( n + 1 )); break; fi
+    done
+  done
+  RET=$n
 }
 
 # save_staged: leave the full screen, show the diff, ask, write, come back.
@@ -4065,7 +4113,7 @@ save_staged() {
   trap 'exit 130' INT
   if review_and_save; then
     read_file "$FILE_REAL"
-    ST=() UNDO=()
+    ST=()
     run_checks
     build_entries
     T_MSG="Saved. Backup: $BACKUP_PATH"
@@ -4105,13 +4153,15 @@ help_lines() {
   hk "l, $r on a heading" "unfold it, or go to its first entry when it is open"
   hk "h, $l" "fold the section on a heading, or go to the heading from an entry"
   hk "" "(in the first column, when there are several)"
-  hk "m" "several columns of names, or one column with pattern and colour"
+  hk "m" "one column with pattern and colour, or several columns of names"
   hk "v" "section view, or palette view: the entries grouped by colour"
   hk "z / Z" "fold every section / unfold every section"
   hk "/" "search (pattern, sample name or section); Esc clears"
+  hk "Esc, q" "leave the palette view (q quits only in the section view)"
   hk "x" "show the codes instead of the colours in words"
   hk "c" "join or separate case pairs such as .deb / .DEB"
-  hk "u" "undo the last change"
+  hk "u" "undo the changes of the entry under the cursor (on a heading: of all its entries)"
+  hk "U" "undo all changes (asks first)"
   hk "s" "review the changes and save them"
   hk "q, Ctrl-C" "quit (asks when there are unsaved changes)"
   hk "?" "this help"
@@ -4314,17 +4364,28 @@ cmd_edit() {
           (( ${#ROW_KIND[@]} )) || T_MSG="No entry matches \"$T_FILTER\". Esc clears the filter."
         fi ;;
       esc)
-        if [[ -n $T_FILTER ]]; then T_FILTER=""; build_rows; fi ;;
+        # first the search goes, then the palette view
+        if [[ -n $T_FILTER ]]; then T_FILTER=""; build_rows
+        elif [[ $T_VIEW == palette ]]; then T_VIEW=section; build_rows
+        fi ;;
       c)
         if (( OPT_CASE )); then OPT_CASE=0; else OPT_CASE=1; fi
         build_entries
         CUR_ID=""
         build_rows ;;
       x) T_RAW=$(( ! T_RAW )) ;;
-      u) undo_last ;;
+      u) undo_here ;;
+      U) undo_all ;;
       s) save_staged ;;
       \?) show_help ;;
       q|quit|eof)
+        # q leaves the palette view first
+        if [[ $KEY == q && $T_VIEW == palette ]]; then
+          T_VIEW=section
+          build_rows
+          draw_screen
+          continue
+        fi
         # q and Ctrl-C ask when there are unsaved changes; Ctrl-C once
         # more at the question quits
         INTR=0
@@ -4341,6 +4402,9 @@ cmd_edit() {
         fi ;;
     esac
     (( RESIZED )) && { RESIZED=0; term_size; screen_reset; }
+    # keys that are already waiting (a held arrow key) are handled before
+    # the next frame, so the screen never lags behind
+    [[ -z $KEY_NEXT ]] && read -t 0 && continue
     draw_screen
   done
   return 0
