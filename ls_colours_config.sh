@@ -2467,9 +2467,7 @@ cmd_fix() {
 # Entries of the list. A case pair (.deb / .DEB) is one entry unless
 # --case-sensitive is on; an entry knows every line that defines it.
 declare -a E_LABEL=() E_NAME=() E_LINES=() E_SEC=()
-declare -a ROW_KIND=() ROW_REF=()    # visible rows: h heading, e entry, b blank
-declare -a ROW_ORD=()                # for entry rows: 1 for the first entry, 2 ...
-ROW_ENTRIES=0
+declare -a ROW_KIND=() ROW_REF=()    # visible rows: h heading (group), e entry
 declare -a ST=()                     # staged values by line number
 declare -a UNDO=()                   # one record per change
 declare -a EV_LIST=()                # distinct values of the entry at hand
@@ -2634,29 +2632,170 @@ build_entries() {
     E_LABEL+=("$label") E_NAME+=("$RET") E_LINES+=("$lines")
     E_SEC+=("${SEC_TITLE[${L_SEC[first]}]}")
   done
+  map_findings
 }
 
-build_rows() {
-  local i sec="" hay needle=${T_FILTER,,}
-  ROW_KIND=() ROW_REF=() ROW_ORD=() ROW_ENTRIES=0
+# --- groups, folding and the rows of the list --------------------------------
+#
+# The entries are shown in groups: the sections of the file. A group is a
+# heading row that can be folded away, followed by its entries.
+declare -a G_TITLE=() G_ENTRIES=() G_N=() G_MAJ=() G_DIFF=() G_KINDS=() G_WARN=()
+declare -a E_GRP=() E_ORD=() E_WARN=()
+declare -A FOLD=() FOLD_F=()         # fold state by view and title; _F while a filter is on
+T_VIEW=section T_FOLD_DEFAULT=0 T_TOTAL=0 GW_TITLE=8
+CUR_ID=""                            # what the cursor is on: e:ENTRY or h:TITLE
+
+# map_findings: E_WARN = what check has to say about each entry. The findings
+# are those of the file as it was last read or saved.
+map_findings() {
+  local i f line
+  local -A at=()
+  E_WARN=()
+  for i in "${!E_LINES[@]}"; do
+    for line in ${E_LINES[i]}; do at[$line]=$i; done
+  done
+  for f in "${!F_LINE[@]}"; do
+    i=${at[${F_LINE[f]}]:-}
+    [[ -n $i ]] || continue
+    E_WARN[i]="${E_WARN[i]:+${E_WARN[i]}; }${F_WHAT[f]}"
+  done
+}
+
+build_groups() {
+  local i key g hay needle=${T_FILTER,,}
+  local -A at=()
+  G_TITLE=() G_ENTRIES=() E_GRP=() E_ORD=() T_TOTAL=0 GW_TITLE=8
   for i in "${!E_LABEL[@]}"; do
     if [[ -n $needle ]]; then
       hay="${E_LABEL[i]} ${E_NAME[i]} ${E_SEC[i]}"
       [[ ${hay,,} == *"$needle"* ]] || continue
     fi
-    if [[ ${E_SEC[i]} != "$sec" || ${#ROW_KIND[@]} -eq 0 ]]; then
-      sec=${E_SEC[i]}
-      # a blank row sets each section apart from the one above
-      if (( ${#ROW_KIND[@]} )); then ROW_KIND+=(b) ROW_REF+=(""); fi
-      ROW_KIND+=(h) ROW_REF+=("$sec")
+    key=${E_SEC[i]:-other entries}
+    if [[ -z ${at[k$key]+x} ]]; then
+      at[k$key]=${#G_TITLE[@]}
+      G_TITLE+=("$key") G_ENTRIES+=("")
+      (( ${#key} > GW_TITLE )) && GW_TITLE=${#key}
     fi
-    ROW_ENTRIES=$(( ROW_ENTRIES + 1 ))
-    ROW_ORD[${#ROW_KIND[@]}]=$ROW_ENTRIES
-    ROW_KIND+=(e) ROW_REF+=("$i")
+    g=${at[k$key]}
+    G_ENTRIES[g]+=" $i"
+    E_GRP[i]=$g
+    T_TOTAL=$(( T_TOTAL + 1 ))
+    E_ORD[i]=$T_TOTAL
   done
-  (( T_CUR >= ${#ROW_KIND[@]} )) && T_CUR=$(( ${#ROW_KIND[@]} - 1 ))
-  (( T_CUR < 0 )) && T_CUR=0
-  [[ ${ROW_KIND[T_CUR]:-} == e ]] || move_cursor 1
+  (( GW_TITLE > 28 )) && GW_TITLE=28
+}
+
+# summarise GROUP: the colour most entries of the group have (G_MAJ), how
+# many have another one (G_DIFF), and how many check complains about.
+summarise() {
+  local g=$1 i key best="" bestn=0 total=0 warn=0
+  local -A tally=() spelt=()
+  for i in ${G_ENTRIES[g]}; do
+    entry_values "$i"
+    plain_colour "$EV_EFF"
+    key=k$RET
+    tally[$key]=$(( ${tally[$key]:-0} + 1 ))
+    [[ -n ${spelt[$key]+x} ]] || spelt[$key]=$EV_EFF
+    if (( ${tally[$key]} > bestn )); then bestn=${tally[$key]} best=$key; fi
+    total=$(( total + 1 ))
+    [[ -n ${E_WARN[i]:-} ]] && warn=$(( warn + 1 ))
+  done
+  G_N[g]=$total G_MAJ[g]=${spelt[$best]:-} G_DIFF[g]=$(( total - bestn )) G_WARN[g]=$warn
+  # without a colour that more than half of the entries share, the group is
+  # simply mixed
+  G_KINDS[g]=0
+  (( bestn * 2 <= total )) && G_KINDS[g]=${#tally[@]}
+}
+
+# is_folded GROUP. A search starts with every group that matches unfolded.
+is_folded() {
+  local key="$T_VIEW/${G_TITLE[$1]}"
+  if [[ -n $T_FILTER ]]; then
+    (( ${FOLD_F[$key]:-0} ))
+  else
+    (( ${FOLD[$key]:-$T_FOLD_DEFAULT} ))
+  fi
+}
+
+# set_fold GROUP 0|1
+set_fold() {
+  local key="$T_VIEW/${G_TITLE[$1]}"
+  if [[ -n $T_FILTER ]]; then FOLD_F[$key]=$2; else FOLD[$key]=$2; fi
+}
+
+# fold_all 0|1
+fold_all() {
+  local g
+  for g in "${!G_TITLE[@]}"; do set_fold "$g" "$1"; done
+}
+
+# toggle_fold: fold or unfold the group the cursor is in; the cursor ends up
+# on its heading.
+toggle_fold() {
+  local g
+  cursor_group || return
+  g=$RET
+  if is_folded "$g"; then set_fold "$g" 0; else set_fold "$g" 1; fi
+  CUR_ID="h:${G_TITLE[g]}"
+  build_rows
+}
+
+# cursor_group -> RET: the group of the row the cursor is on.
+cursor_group() {
+  local ref=${ROW_REF[T_CUR]:-}
+  case ${ROW_KIND[T_CUR]:-} in
+    h) RET=$ref ;;
+    e) RET=${E_GRP[ref]} ;;
+    *) return 1 ;;
+  esac
+}
+
+build_rows() {
+  local g i
+  build_groups
+  ROW_KIND=() ROW_REF=()
+  for g in "${!G_TITLE[@]}"; do
+    summarise "$g"
+    ROW_KIND+=(h) ROW_REF+=("$g")
+    is_folded "$g" && continue
+    for i in ${G_ENTRIES[g]}; do ROW_KIND+=(e) ROW_REF+=("$i"); done
+  done
+  place_cursor
+}
+
+# place_cursor: put the cursor back on what CUR_ID names. An entry that is
+# folded away is replaced by its heading. Without a CUR_ID the cursor goes to
+# the first entry on screen.
+place_cursor() {
+  local r n=${#ROW_KIND[@]} want=$CUR_ID g
+  T_CUR=0
+  (( n )) || return
+  if [[ -z $want ]]; then
+    [[ ${ROW_KIND[1]:-} == e ]] && T_CUR=1
+    T_TOP=0
+  fi
+  if [[ $want == e:* ]]; then
+    for (( r = 0; r < n; r++ )); do
+      if [[ ${ROW_KIND[r]} == e && ${ROW_REF[r]} == "${want#e:}" ]]; then T_CUR=$r; return; fi
+    done
+    g=${E_GRP[${want#e:}]:-}
+    [[ -n $g ]] && want="h:${G_TITLE[g]}"
+  fi
+  if [[ $want == h:* ]]; then
+    for (( r = 0; r < n; r++ )); do
+      if [[ ${ROW_KIND[r]} == h && ${G_TITLE[${ROW_REF[r]}]} == "${want#h:}" ]]; then T_CUR=$r; break; fi
+    done
+  fi
+  remember_cursor
+}
+
+remember_cursor() {
+  local ref=${ROW_REF[T_CUR]:-}
+  case ${ROW_KIND[T_CUR]:-} in
+    e) CUR_ID="e:$ref" ;;
+    h) CUR_ID="h:${G_TITLE[ref]}" ;;
+    *) CUR_ID="" ;;
+  esac
 }
 
 # entry_values INDEX: EV_LIST = the distinct values of the entry right now,
@@ -2672,24 +2811,14 @@ entry_values() {
   done
 }
 
-# move_cursor DELTA: move by DELTA entries, skipping headings.
+# move_cursor DELTA: move by DELTA rows; headings are rows like any other.
 move_cursor() {
-  local step=1 n=$1 i=$T_CUR j total=${#ROW_KIND[@]}
+  local total=${#ROW_KIND[@]}
   (( total )) || return
-  (( n < 0 )) && step=-1 n=$(( -n ))
-  while (( n > 0 )); do
-    j=$(( i + step ))
-    while (( j >= 0 && j < total )) && [[ ${ROW_KIND[j]} != e ]]; do j=$(( j + step )); done
-    (( j < 0 || j >= total )) && break
-    i=$j n=$(( n - 1 ))
-  done
-  # the cursor never rests on a heading or a blank row
-  if [[ ${ROW_KIND[i]} != e ]]; then
-    for (( j = i + 1; j < total; j++ )); do
-      if [[ ${ROW_KIND[j]} == e ]]; then i=$j; break; fi
-    done
-  fi
-  T_CUR=$i
+  T_CUR=$(( T_CUR + $1 ))
+  (( T_CUR >= total )) && T_CUR=$(( total - 1 ))
+  (( T_CUR < 0 )) && T_CUR=0
+  remember_cursor
 }
 
 # --- glyphs ------------------------------------------------------------------
@@ -2825,6 +2954,7 @@ render_header() {
   if (( OPT_256 )); then right="256 colours"; else right="16 colours"; fi
   if (( OPT_CASE )); then right+=" $GL_DOT pairs apart"; else right+=" $GL_DOT pairs joined"; fi
   (( OPT_DRY )) && right+=" $GL_DOT dry run"
+  [[ -n $T_FILTER ]] && right+=" $GL_DOT filtered"
   right+=" $GL_DOT "
   tail="$n unsaved"
   # on a narrow screen the file name matters more than the settings
@@ -2847,8 +2977,8 @@ render_footer() {
     picker) hints=("arrows|choose" "Tab|next field" "$GL_K_SPACE|toggle" "e|type a code"
                    "r|reset" "$GL_K_ENTER|accept" "Esc|cancel") ;;
     search) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
-    *)      hints=("$GL_K_MOVE|move" "$GL_K_ENTER|edit" "/|search" "u|undo" "s|save"
-                   "?|help" "q|quit" "x|codes" "c|case pairs") ;;
+    *)      hints=("$GL_K_MOVE|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "/|search" "u|undo" "s|save"
+                   "?|help" "q|quit" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -2891,14 +3021,17 @@ row_text() {
 # with the width of each row in LP_LEN.
 declare -a LP_TXT=() LP_LEN=()
 render_list() {
-  local w=$1 h=$2 r idx kind ref wn=22 wl=20 name label cell clen extra gutter pad1 pad2
+  local w=$1 h=$2 r idx kind ref wn=22 wl=20 wt name label cell clen extra gutter pad1 pad2
+  local mark warn plain tail limit
   LP_TXT=() LP_LEN=()
   (( w < 70 )) && wn=16 wl=14
   if (( w < 44 )); then
     # no room for the colour in words: sample and pattern share the pane
-    wn=14 wl=$(( w - 22 ))
+    wn=14 wl=$(( w - 23 ))
     (( wl < 0 )) && wl=0
   fi
+  wt=$GW_TITLE
+  (( wt > w - 12 )) && wt=$(( w - 12 > 0 ? w - 12 : 0 ))
   (( T_CUR < T_TOP )) && T_TOP=$T_CUR
   (( T_CUR >= T_TOP + h )) && T_TOP=$(( T_CUR - h + 1 ))
   # keep the heading of the first visible entry on screen
@@ -2909,10 +3042,31 @@ render_list() {
     LP_TXT[r]="" LP_LEN[r]=0
     (( idx < ${#ROW_KIND[@]} )) || continue
     kind=${ROW_KIND[idx]} ref=${ROW_REF[idx]}
-    [[ $kind == b ]] && continue
+    # the cursor is a bar in the margin and a brighter text; reverse video
+    # would be mistaken for the colour of an entry
+    if (( idx == T_CUR )); then gutter="${C_B}${C_C}$GL_CUR${C_0}"; else gutter=" "; fi
     if [[ $kind == h ]]; then
-      ref=${ref:0:$(( w - 2 > 0 ? w - 2 : 0 ))}
-      LP_TXT[r]="  ${C_B}$ref${C_0}" LP_LEN[r]=$(( ${#ref} + 2 ))
+      # fold marker, title, number of entries, what colour they have
+      if is_folded "$ref"; then mark=$GL_SHUT; else mark=$GL_OPEN; fi
+      name=${G_TITLE[ref]:0:wt}
+      spaces "$(( wt - ${#name} ))"; pad1=$RET
+      printf -v cell '%4d' "${G_N[ref]}"
+      if (( T_RAW )); then RET=${G_MAJ[ref]}; else describe_value "${G_MAJ[ref]}"; fi
+      plain=$RET tail="${C_D}$RET${C_0}"
+      if (( G_KINDS[ref] )); then
+        plain="mixed, ${G_KINDS[ref]} colours" tail="${C_D}$plain${C_0}"
+      elif (( G_DIFF[ref] )); then
+        plain+="  (${G_DIFF[ref]} differ)" tail+="  ${C_Y}(${G_DIFF[ref]} differ)${C_0}"
+      fi
+      if (( G_WARN[ref] )); then
+        plain+="  $GL_WARN ${G_WARN[ref]}" tail+="  ${C_Y}$GL_WARN ${G_WARN[ref]}${C_0}"
+      fi
+      limit=$(( w - wt - 12 ))
+      (( limit < 0 )) && limit=0
+      if (( ${#plain} > limit )); then plain=${plain:0:limit} tail="${C_D}$plain${C_0}"; fi
+      if (( idx == T_CUR )); then name="${C_B}${C_C}$name${C_0}"; else name="${C_B}$name${C_0}"; fi
+      LP_TXT[r]="$gutter$mark $name$pad1  ${C_D}$cell${C_0}   $tail"
+      LP_LEN[r]=$(( wt + 12 + ${#plain} ))
       continue
     fi
     entry_values "$ref"
@@ -2926,25 +3080,32 @@ render_list() {
     fi
     spaces "$(( wn - clen ))"; pad1=$RET
     spaces "$(( wl - ${#label} ))"; pad2=$RET
-    row_text "$ref" "$(( w - wn - wl - 8 ))"
-    # the cursor is a bar in the margin and a brighter pattern; reverse video
-    # would be mistaken for the colour of the entry
-    if (( idx == T_CUR )); then
-      gutter="${C_B}${C_C}$GL_CUR${C_0}" label="${C_B}$label${C_0}"
-    else
-      gutter=" "
-    fi
-    LP_TXT[r]="$gutter   $cell$pad1  $label$pad2  $RET"
+    row_text "$ref" "$(( w - wn - wl - 9 ))"
+    (( idx == T_CUR )) && label="${C_B}$label${C_0}"
+    warn=" "
+    [[ -n ${E_WARN[ref]:-} ]] && warn="${C_Y}$GL_WARN${C_0}"
+    LP_TXT[r]="$gutter  $warn $cell$pad1  $label$pad2  $RET"
     # shellcheck disable=SC2034
-    LP_LEN[r]=$(( wn + wl + 8 + RET2 ))
+    LP_LEN[r]=$(( wn + wl + 7 + RET2 ))
   done
 }
 
-# info_line W -> RET: the row above the key hints: a message, or the filter.
+# info_line W -> RET: the row above the key hints: a message, what check says
+# about the row under the cursor, or the filter.
 info_line() {
-  local w=$1
+  local w=$1 ref=${ROW_REF[T_CUR]:-} text=""
+  (( w > 1 )) || { RET=""; return; }
   if [[ -n $T_MSG ]]; then
-    RET=" ${T_MSG:0:$(( w - 1 > 0 ? w - 1 : 0 ))}"
+    RET=" ${T_MSG:0:$(( w - 1 ))}"
+    return
+  fi
+  case ${ROW_KIND[T_CUR]:-} in
+    e) text=${E_WARN[ref]:-} ;;
+    h) (( ${G_WARN[ref]:-0} )) && text="check has findings for ${G_WARN[ref]} of these entries; unfold to see them" ;;
+  esac
+  if [[ -n $text ]]; then
+    text="$GL_WARN $text"
+    RET=" ${C_Y}${text:0:$(( w - 1 ))}${C_0}"
   elif [[ -n $T_FILTER ]]; then
     RET=" ${C_D}filter:${C_0} ${T_FILTER:0:$(( w - 24 > 0 ? w - 24 : 0 ))}  ${C_D}(Esc clears)${C_0}"
   else
@@ -2973,7 +3134,10 @@ compose_frame() {
   buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}${C_D}$RET${C_0}"
   info_line "$COLS"
   buf+="${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}$RET"
-  [[ ${ROW_KIND[T_CUR]:-} == e ]] && pos="${ROW_ORD[T_CUR]}/$ROW_ENTRIES"
+  case ${ROW_KIND[T_CUR]:-} in
+    e) pos="${E_ORD[${ROW_REF[T_CUR]}]}/$T_TOTAL" ;;
+    h) pos="$T_TOTAL entries" ;;
+  esac
   render_footer "$COLS" "$T_CTX" "$pos"
   buf+="${ROW_AT}${ROWS}${ROW_TXT}$RET"
   RET=$buf
@@ -3244,6 +3408,7 @@ open_picker() {
     if [[ $v == "${L_VAL[i]}" ]]; then unset "ST[$i]"; else ST[i]=$v; fi
   done
   UNDO+=("${record%"$NL"}")
+  build_rows
   describe_value "$v"
   T_MSG="${E_LABEL[ref]} set to $RET ($v)"
   return 0
@@ -3257,6 +3422,7 @@ undo_last() {
     if [[ ${line#*=} == U ]]; then unset "ST[$i]"; else ST[i]=${line#*=V}; fi
   done <<<"${UNDO[n-1]}"
   unset "UNDO[$(( n - 1 ))]"
+  build_rows
   T_MSG="Undone."
 }
 
@@ -3269,6 +3435,7 @@ save_staged() {
   if review_and_save; then
     read_file "$FILE_REAL"
     ST=() UNDO=()
+    run_checks
     build_entries
     T_MSG="Saved. Backup: $BACKUP_PATH"
   else
@@ -3291,6 +3458,8 @@ show_help() {
     "Keys in the list"
     "  up / down, j / k     move            PgUp / PgDn, g / G   move further"
     "  Enter, l             edit the colour of the entry"
+    "  Space                fold or unfold the section (also h / l on its heading)"
+    "  z / Z                fold every section / unfold every section"
     "  /                    search (pattern, sample name or section); Esc clears"
     "  x                    show the codes instead of the colours in words"
     "  c                    join or separate case pairs such as .deb / .DEB"
@@ -3355,7 +3524,8 @@ cmd_edit() {
     die "edit needs a terminal for input and output"
   fi
   load_config
-  detect_tools
+  prepare_checks
+  run_checks
   OPT_COLOUR=always
   setup_colour
   setup_glyphs
@@ -3365,6 +3535,10 @@ cmd_edit() {
     exit 1
   fi
   term_size
+  build_groups
+  # a file that does not fit on one screen starts as a list of its sections
+  (( ${#E_LABEL[@]} + ${#G_TITLE[@]} > ROWS - 5 )) && T_FOLD_DEFAULT=1
+  CUR_ID=""
   build_rows
   tui_start
   trap 'RESIZED=1' WINCH
@@ -3383,25 +3557,43 @@ cmd_edit() {
       pgup)    move_cursor "-$page" ;;
       pgdn)    move_cursor "$page" ;;
       home|g)  T_CUR=0; T_TOP=0; move_cursor 0 ;;
-      end|G)   T_CUR=$(( ${#ROW_KIND[@]} - 1 )) ;;
-      enter|l|right)
-        if [[ ${ROW_KIND[T_CUR]:-} == e ]]; then open_picker "${ROW_REF[T_CUR]}"; fi ;;
+      end|G)   move_cursor "${#ROW_KIND[@]}" ;;
+      enter)
+        case ${ROW_KIND[T_CUR]:-} in
+          e) open_picker "${ROW_REF[T_CUR]}" ;;
+          h) toggle_fold ;;
+        esac ;;
+      l|right)
+        # on a heading: unfold, then step into the group
+        case ${ROW_KIND[T_CUR]:-} in
+          e) open_picker "${ROW_REF[T_CUR]}" ;;
+          h) if is_folded "${ROW_REF[T_CUR]}"; then toggle_fold; else move_cursor 1; fi ;;
+        esac ;;
+      h|left)
+        # on a heading: fold; on an entry: back to its heading
+        case ${ROW_KIND[T_CUR]:-} in
+          e) cursor_group && CUR_ID="h:${G_TITLE[RET]}" && place_cursor ;;
+          h) is_folded "${ROW_REF[T_CUR]}" || toggle_fold ;;
+        esac ;;
+      space)   toggle_fold ;;
+      z)       cursor_group && CUR_ID="h:${G_TITLE[RET]}"; fold_all 1; build_rows ;;
+      Z)       fold_all 0; build_rows ;;
       /)
         T_CTX=search
         draw_screen
         T_CTX=list
         if line_input " search: " "$T_FILTER"; then
           T_FILTER=$RET
-          T_CUR=0 T_TOP=0
+          FOLD_F=() CUR_ID=""
           build_rows
           (( ${#ROW_KIND[@]} )) || T_MSG="No entry matches \"$T_FILTER\". Esc clears the filter."
         fi ;;
       esc)
-        if [[ -n $T_FILTER ]]; then T_FILTER=""; T_CUR=0; T_TOP=0; build_rows; fi ;;
+        if [[ -n $T_FILTER ]]; then T_FILTER=""; build_rows; fi ;;
       c)
         if (( OPT_CASE )); then OPT_CASE=0; else OPT_CASE=1; fi
         build_entries
-        T_CUR=0 T_TOP=0
+        CUR_ID=""
         build_rows ;;
       x) T_RAW=$(( ! T_RAW )) ;;
       u) undo_last ;;

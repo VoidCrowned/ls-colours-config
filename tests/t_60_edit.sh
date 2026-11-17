@@ -13,12 +13,43 @@ OPT_CASE=1; build_entries
 is "${#E_LABEL[@]}" 8 "--case-sensitive lists every spelling"
 is "${E_LABEL[1]}|${E_LINES[1]}" ".TAR| 3" "...each with its own line"
 OPT_CASE=0; build_entries
-T_FILTER="png"; T_CUR=0; build_rows
+F_LINE=() FOLD=() FOLD_F=() T_FOLD_DEFAULT=0 T_VIEW=section
+build_entries
+T_FILTER="png"; CUR_ID=""; build_rows
 is "${#ROW_KIND[@]}" 2 "search filters the list (heading plus one entry)"
-T_FILTER=""; build_rows
-is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeebhee" "a blank row separates the sections"
+T_FILTER=""; CUR_ID=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeehee" "each section is a heading row followed by its entries"
+is "$T_CUR" 1 "the cursor starts on the first entry"
 T_CUR=3; move_cursor 1
-is "$T_CUR" 6 "the cursor skips the blank row and the heading"
+is "$T_CUR|$CUR_ID" "4|h:images" "the cursor can rest on a heading"
+
+group "edit: folding"
+toggle_fold
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "heeeh" "a section folds away"
+is "$CUR_ID" "h:images" "...and the cursor stays on its heading"
+toggle_fold
+is "${#ROW_KIND[@]}" 7 "...and unfolds again"
+CUR_ID="e:1"; place_cursor
+is "$T_CUR" 2 "the cursor finds its entry"
+toggle_fold
+is "$T_CUR|$CUR_ID" "0|h:archives" "folding from an entry puts the cursor on the heading"
+fold_all 1; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "hh" "z folds every section"
+T_FILTER="png"; FOLD_F=(); CUR_ID=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "he" "a search unfolds the sections with matches and hides the others"
+T_FILTER=""; build_rows
+is "$(IFS=; printf '%s' "${ROW_KIND[*]}")" "hh" "...and the folds are back when the search ends"
+fold_all 0; CUR_ID=""; build_rows
+is "${#ROW_KIND[@]}" 7 "Z unfolds every section"
+summarise 0
+is "${G_N[0]}|${G_MAJ[0]}|${G_DIFF[0]}|${G_KINDS[0]}" "3|31|1|0" "a section knows its most common colour and how many entries differ"
+ST[3]=35 ST[4]=36 ST[5]=37 ST[6]=33
+summarise 0
+is "${G_KINDS[0]}" 3 "without a majority the section is mixed"
+ST=()
+F_LINE=(6) F_WHAT=(".zip is odd"); map_findings; build_rows
+is "${E_WARN[2]}|${G_WARN[0]}|${G_WARN[1]}" ".zip is odd|1|0" "findings of check are attached to their entries and counted per section"
+F_LINE=() F_WHAT=(); map_findings; build_rows
 
 group "edit: colour picker"
 picker_load "00;33"
