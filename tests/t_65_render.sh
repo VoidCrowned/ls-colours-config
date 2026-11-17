@@ -116,9 +116,15 @@ render_state
 
 group "edit: header and key hints"
 plain render_header 70
-is "$RET" " ls_colours_config.sh - pairs.dircolors                     0 unsaved " "a narrow header keeps the file name"
+is "$RET" " ls_colours_config.sh - pairs.dircolors      section view - 0 unsaved " "a narrow header keeps the file name and the view"
+plain render_header 120
+is "$RET" " ls_colours_config.sh - pairs.dircolors                            16 colours - pairs joined - section view - 0 unsaved " "a wide header shows the settings"
 plain render_header 90
-is "$RET" " ls_colours_config.sh - pairs.dircolors             16 colours - pairs joined - 0 unsaved " "a wide header shows the settings"
+is "$RET" " ls_colours_config.sh - pairs.dircolors           pairs joined - section view - 0 unsaved " "...dropping the least important first"
+OPT_DRY=1 FILE=/a/rather/long/path/to/the/dircolors/file
+plain render_header 60
+is "$RET" " /a/rather/long/path/to  dry run - section view - 0 unsaved " "a dry run and the view stay; the tool's name goes and a long file name is cut"
+OPT_DRY=0 FILE=pairs.dircolors
 ST[2]=33
 plain render_header 90
 has "$RET" "1 unsaved" "the header counts staged changes"
@@ -134,7 +140,7 @@ has "$RET" "Esc cancel" "...and so has the search"
 group "edit: the whole screen"
 COLS=60 ROWS=12
 frame_text
-is "$RET" " ls_colours_config.sh - pairs.dircolors           0 unsaved 
+is "$RET" " pairs.dircolors                   section view - 0 unsaved 
 ------------------------------------------------------------
  - archives     3   red  (1 differ)
 >    example.tar       .tar / .TAR     red
@@ -350,7 +356,7 @@ CUR_ID="h:archives"; build_rows
 summarise 0
 # G_ENTRIES comes from the script, which shellcheck does not follow here
 # shellcheck disable=SC2153
-PK_GRP=0 PK_ENTRIES=${G_ENTRIES[0]} PK_REF=0 PK_START=${G_MAJ[0]} PK_GDIFF=${G_DIFF[0]} PK_OLD="31 (1 differ)" PK_FILE=31
+PK_GRP=0 PK_GNAME=archives PK_ENTRIES=${G_ENTRIES[0]} PK_REF=0 PK_START=${G_MAJ[0]} PK_GDIFF=${G_DIFF[0]} PK_OLD="31 (1 differ)" PK_FILE=31
 picker_load 31; PK_FIELD=0; T_FOCUS=picker T_CTX=picker
 picker_move 0 2
 preview_set
@@ -437,3 +443,43 @@ T_MULTI=0; build_flow
 COLS=100 ROWS=12
 frame_text
 has "$RET" "example.zip             .zip                  red" "m: one column with details again"
+
+group "edit: palette view"
+render_state
+T_VIEW=palette; CUR_ID=""; build_rows
+# pairs: .tar red, .gz red|green (green counts), .zip red, .png and .jpg magenta
+is "$(IFS=,; printf '%s' "${G_TITLE[*]}")" "31,35,32" "groups by colour, the most used first"
+is "${G_ENTRIES[0]}|${G_ENTRIES[2]}" " 0 2| 1" "...each with the entries of that colour"
+list_text 60 9
+is "$RET" " - ## red         2
+>    example.tar       .tar / .TAR     archives
+     example.zip       .zip            archives
+ - ## magenta     2
+     example.png       .png / .PNG     images
+     example.jpg       .jpg            images
+ - ## green       1
+     example.gz        .gz / .GZ       archives" "a heading is the colour with a swatch and a count; a row names its section"
+COLS=100 ROWS=12
+frame_text
+has "$RET" "palette view" "the header says which view is on"
+CUR_ID="e:2"; place_cursor
+PK_GRP=-1 PK_ENTRIES=" 2" PK_REF=2; picker_load 31; PK_FIELD=0; picker_move 0 1; preview_set
+build_groups
+is "${G_ENTRIES[0]}" " 0 2" "while the picker is open the entry stays in its group"
+PV=()
+stage_value " 2" 32; build_rows
+is "${G_TITLE[*]}|${G_ENTRIES[0]}" "32 35 31| 1 2" "on accept it moves to the group of its new colour"
+cur_entry; is "$RET" 2 "...and the cursor goes with it"
+undo_last; build_rows
+stage_value "${G_ENTRIES[0]}" 35; build_rows
+is "${G_TITLE[*]}|${#UNDO[@]}" "35 32|1" "recolouring a whole colour merges its group into another, one step for undo"
+undo_last; build_rows
+is "${G_TITLE[*]}" "31 35 32" "...and undo splits it again"
+T_FILTER=png; FOLD_F=(); CUR_ID=""; build_rows
+is "${G_TITLE[*]}|${ROW_KIND[*]}" "35|h e" "a search in the palette shows only the colours with matches"
+T_FILTER=""; build_rows
+fold_all 1; build_rows
+is "${ROW_KIND[*]}" "h h h" "folding works the same"
+T_VIEW=section; build_rows
+is "${ROW_KIND[*]}" "h e e e h e e" "...and the section view keeps its own folds"
+T_VIEW=section

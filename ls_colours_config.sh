@@ -2695,27 +2695,72 @@ map_findings() {
 }
 
 build_groups() {
-  local i key g hay needle=${T_FILTER,,}
+  local i key g hay needle=${T_FILTER,,} q last v n
   local -A at=()
+  local -a order=() titles=() ents=()
   G_TITLE=() G_ENTRIES=() E_GRP=() E_ORD=() T_TOTAL=0 GW_TITLE=8
   for i in "${!E_LABEL[@]}"; do
     if [[ -n $needle ]]; then
       hay="${E_LABEL[i]} ${E_NAME[i]} ${E_SEC[i]}"
       [[ ${hay,,} == *"$needle"* ]] || continue
     fi
-    key=${E_SEC[i]:-other entries}
+    if [[ $T_VIEW == palette ]]; then
+      # by the colour the entry has with the staged changes, never by what
+      # an open picker shows: entries move to another group on accept
+      last=0 v=""
+      for q in ${E_LINES[i]}; do
+        if (( q > last )); then last=$q v=${ST[q]-${L_VAL[q]}}; fi
+      done
+      plain_colour "$v"
+      key=$RET
+    else
+      key=${E_SEC[i]:-other entries}
+    fi
     if [[ -z ${at[k$key]+x} ]]; then
       at[k$key]=${#G_TITLE[@]}
       G_TITLE+=("$key") G_ENTRIES+=("")
-      (( ${#key} > GW_TITLE )) && GW_TITLE=${#key}
     fi
     g=${at[k$key]}
     G_ENTRIES[g]+=" $i"
-    E_GRP[i]=$g
-    T_TOTAL=$(( T_TOTAL + 1 ))
-    E_ORD[i]=$T_TOTAL
+  done
+  # the palette: the most used colour first
+  if [[ $T_VIEW == palette ]]; then
+    for g in "${!G_TITLE[@]}"; do
+      read -r -a ents <<<"${G_ENTRIES[g]}"
+      printf -v n '%06d %06d' "$(( 999999 - ${#ents[@]} ))" "$g"
+      order+=("$n")
+    done
+    titles=("${G_TITLE[@]}") ents=("${G_ENTRIES[@]}")
+    G_TITLE=() G_ENTRIES=()
+    while read -r n g; do
+      g=$(( 10#$g ))
+      G_TITLE+=("${titles[g]}") G_ENTRIES+=("${ents[g]}")
+    done < <(printf '%s\n' "${order[@]}" | sort)
+  fi
+  for g in "${!G_TITLE[@]}"; do
+    group_name "$g"
+    (( ${#RET} + GN_EXTRA > GW_TITLE )) && GW_TITLE=$(( ${#RET} + GN_EXTRA ))
+    for i in ${G_ENTRIES[g]}; do
+      E_GRP[i]=$g
+      T_TOTAL=$(( T_TOTAL + 1 ))
+      E_ORD[i]=$T_TOTAL
+    done
   done
   (( GW_TITLE > 28 )) && GW_TITLE=28
+}
+
+# group_name GROUP -> RET: what the heading of a group says: the section, or
+# in the palette the colour in words (or its code with x). GN_EXTRA is the
+# room the palette's swatch takes in front of it.
+GN_EXTRA=0
+group_name() {
+  GN_EXTRA=0
+  if [[ $T_VIEW == palette ]]; then
+    GN_EXTRA=3
+    if (( T_RAW )); then RET=${G_TITLE[$1]}; else describe_value "${G_TITLE[$1]}"; fi
+  else
+    RET=${G_TITLE[$1]}
+  fi
 }
 
 # summarise GROUP: the colour most entries of the group have (G_MAJ), how
@@ -3061,19 +3106,32 @@ rule() {
 
 # render_header W -> RET: tool and file on the left, the state on the right.
 render_header() {
-  local w=$1 left right tail plain n=${#ST[@]} room
+  local w=$1 left right="" tail plain n=${#ST[@]} room i p
+  local -a parts=()
   left=" $PROG $GL_DOT $FILE"
-  if (( OPT_256 )); then right="256 colours"; else right="16 colours"; fi
-  if (( OPT_CASE )); then right+=" $GL_DOT pairs apart"; else right+=" $GL_DOT pairs joined"; fi
-  (( OPT_DRY )) && right+=" $GL_DOT dry run"
-  [[ -n $T_FILTER ]] && right+=" $GL_DOT filtered"
-  right+=" $GL_DOT "
+  # the settings, least important first: on a narrow screen they go one by
+  # one, so that the view, a search and a dry run stay in sight longest
+  if (( OPT_256 )); then parts+=("256 colours"); else parts+=("16 colours"); fi
+  if (( OPT_CASE )); then parts+=("pairs apart"); else parts+=("pairs joined"); fi
+  [[ -n $T_FILTER ]] && parts+=("filtered")
+  (( OPT_DRY )) && parts+=("dry run")
+  parts+=("$T_VIEW view")
   tail="$n unsaved"
-  # on a narrow screen the file name matters more than the settings
-  (( ${#left} + ${#right} + ${#tail} + 3 > w )) && right=""
+  # the palette and pairs settings go first, to make room for the whole file
+  # name; then the file name is cut, down to 20 characters; only then do a
+  # search, a dry run and the view go
+  for (( i = 0; i <= ${#parts[@]}; i++ )); do
+    right=""
+    for p in "${parts[@]:i}"; do right+="$p $GL_DOT "; done
+    (( i < 2 && ${#left} + ${#right} + ${#tail} + 2 > w )) && continue
+    (( i >= 2 && 20 + ${#right} + ${#tail} + 2 > w )) && continue
+    break
+  done
   plain="$right$tail "
   room=$(( w - ${#plain} - 2 ))
   (( room < 0 )) && room=0
+  # short of room, the file name matters more than the name of the tool
+  (( ${#left} > room )) && left=" $FILE"
   left=${left:0:room}
   spaces "$(( w - ${#left} - ${#plain} ))"
   if (( n )); then tail="${C_B}${C_Y}$tail${C_0}"; else tail="${C_D}$tail${C_0}"; fi
@@ -3093,7 +3151,7 @@ render_footer() {
     *)      k=$GL_K_MOVE
             (( FLOW_MULTI )) && k=$GL_K_ARROWS
             hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "q|quit" "m|columns" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+                   "s|save" "q|quit" "v|view" "m|columns" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -3113,7 +3171,11 @@ render_footer() {
 row_text() {
   local limit=$2 v plain="" out=""
   (( limit < 0 )) && limit=0
-  if (( EV_MOD )); then
+  if [[ $T_VIEW == palette ]]; then
+    # the group says the colour; the row says where the entry lives
+    plain=${E_SEC[$1]} out="${C_D}$plain${C_0}"
+    if (( EV_MOD )); then plain="* $plain" out="${C_B}${C_Y}*${C_0} $out"; fi
+  elif (( EV_MOD )); then
     if (( T_RAW )); then RET=$EV_EFF; else describe_value "$EV_EFF"; fi
     plain="* $GL_TO $RET"
     out="${C_B}${C_Y}*${C_0} ${C_D}$GL_TO${C_0} $RET"
@@ -3166,17 +3228,22 @@ render_list() {
     if [[ $kind == h ]]; then
       # fold marker, title, number of entries, what colour they have
       if is_folded "$ref"; then mark=$GL_SHUT; else mark=$GL_OPEN; fi
-      name=${G_TITLE[ref]:0:wt}
-      spaces "$(( wt - ${#name} ))"; pad1=$RET
+      group_name "$ref"
+      name=${RET:0:$(( wt - GN_EXTRA > 0 ? wt - GN_EXTRA : 0 ))}
+      spaces "$(( wt - GN_EXTRA - ${#name} ))"; pad1=$RET
       printf -v cell '%4d' "${G_N[ref]}"
       if (( T_RAW )); then RET=${G_MAJ[ref]}; else describe_value "${G_MAJ[ref]}"; fi
       plain=$RET tail="${C_D}$RET${C_0}"
+      # in the palette the heading is the colour itself
+      [[ $T_VIEW == palette ]] && plain="" tail=""
       if (( G_DIFF[ref] )); then
         plain+="  (${G_DIFF[ref]} differ)" tail+="  ${C_Y}(${G_DIFF[ref]} differ)${C_0}"
       fi
       if (( G_WARN[ref] )); then
         plain+="  $GL_WARN ${G_WARN[ref]}" tail+="  ${C_Y}$GL_WARN ${G_WARN[ref]}${C_0}"
       fi
+      plain=${plain#  }
+      [[ $T_VIEW == palette ]] && tail=${tail#  }
       limit=$(( w - wt - 12 ))
       (( limit < 0 )) && limit=0
       if (( ${#plain} > limit )); then plain=${plain:0:limit} tail="${C_D}$plain${C_0}"; fi
@@ -3184,8 +3251,13 @@ render_list() {
       elif (( LIST_DIM )); then name="${C_D}$name${C_0}"
       else name="${C_B}$name${C_0}"
       fi
-      LP_TXT[r]="$gutter$mark $name$pad1  ${C_D}$cell${C_0}   $tail"
-      LP_LEN[r]=$(( wt + 12 + ${#plain} ))
+      if (( GN_EXTRA )); then
+        paint "${G_MAJ[ref]}" "$GL_SW"
+        name="$RET $name"
+      fi
+      LP_TXT[r]="$gutter$mark $name$pad1  ${C_D}$cell${C_0}"
+      LP_LEN[r]=$(( wt + 9 ))
+      if [[ -n $plain ]]; then LP_TXT[r]+="   $tail"; LP_LEN[r]=$(( wt + 12 + ${#plain} )); fi
       continue
     fi
     if (( FLOW_MULTI )); then
@@ -3260,6 +3332,11 @@ info_line() {
         row_text "$ref" "$w"
         strip_sgr "$RET"
         about="${E_NAME[ref]}  ${E_LABEL[ref]}  $RET"
+        if [[ $T_VIEW == palette ]]; then
+          if (( T_RAW )); then RET=$EV_EFF; else describe_value "$EV_EFF"; fi
+          about="${E_NAME[ref]}  ${E_LABEL[ref]}  $RET  in ${E_SEC[ref]}"
+          (( EV_MOD )) && about+="  (changed)"
+        fi
       fi ;;
     h)
       ref=${ROW_REF[T_CUR]}
@@ -3630,8 +3707,8 @@ render_picker() {
   # what is being edited, and where it lives
   title=${E_LABEL[ref]} sec=${E_SEC[ref]}
   if (( PK_GRP >= 0 )); then
-    title="all of ${G_TITLE[PK_GRP]}" sec="${G_N[PK_GRP]} entries"
-    [[ -n $T_FILTER ]] && title="${G_TITLE[PK_GRP]}, matches only" sec="${G_N[PK_GRP]} matching"
+    title="all of $PK_GNAME" sec="${G_N[PK_GRP]} entries"
+    [[ -n $T_FILTER ]] && title="$PK_GNAME, matches only" sec="${G_N[PK_GRP]} matching"
   fi
   (( ${#sec} > w / 3 )) && sec=${sec:0:$(( w / 3 ))}
   (( ${#title} > w - ${#sec} - 5 )) && title=${title:0:$(( w - ${#sec} - 5 > 0 ? w - ${#sec} - 5 : 0 ))}
@@ -3825,7 +3902,7 @@ ask_yes() {
 
 # open_picker ENTRY [GROUP]: edit one entry, or with GROUP every entry of a
 # group (ENTRY is then the first of them). Stages the result on Enter.
-PK_GRP=-1 PK_ENTRIES="" PK_GDIFF=0
+PK_GRP=-1 PK_ENTRIES="" PK_GDIFF=0 PK_GNAME=""
 open_picker() {
   local ref=$1 old v codes=(1 2 4 7 5) a dirty=1 e c
   local -A tally=()
@@ -3834,6 +3911,9 @@ open_picker() {
     summarise "$PK_GRP"
     PK_ENTRIES=${G_ENTRIES[PK_GRP]}
     PK_START=${G_MAJ[PK_GRP]} PK_GDIFF=${G_DIFF[PK_GRP]}
+    group_name "$PK_GRP"
+    PK_GNAME=$RET
+    [[ $T_VIEW == palette ]] && PK_GNAME="the $RET entries"
     old=$PK_START
     (( PK_GDIFF )) && old+=" ($PK_GDIFF differ)"
     # the colour most of them have in the file
@@ -3925,7 +4005,7 @@ open_picker() {
       PK_TOUCHED=1
       draw_screen
       if [[ -n $T_FILTER ]]; then c="the ${G_N[PK_GRP]} matching entries"; else c="all ${G_N[PK_GRP]} entries"; fi
-      if ! ask_yes "Give $c of ${G_TITLE[PK_GRP]} the colour $e? $a of them change."; then
+      if ! ask_yes "Give $c of $PK_GNAME the colour $e? $a of them change."; then
         PV=()
         build_rows
         T_MSG="Nothing changed."
@@ -3936,10 +4016,12 @@ open_picker() {
   PV=()
   if (( ! PK_TOUCHED )); then build_rows; return 1; fi
   stage_value "$PK_ENTRIES" "$v"
+  # in the palette the group of the new colour takes the cursor
+  if (( PK_GRP >= 0 )) && [[ $T_VIEW == palette ]]; then plain_colour "$v"; CUR_ID="h:$RET"; fi
   build_rows
   describe_value "$v"
   if (( PK_GRP >= 0 )); then
-    T_MSG="${G_TITLE[PK_GRP]}: $a entries changed to $RET ($v), one step for undo"
+    T_MSG="$PK_GNAME: $a entries changed to $RET ($v), one step for undo"
     [[ -n $T_FILTER ]] && T_MSG+="; only entries matching the search"
   else
     T_MSG="${E_LABEL[ref]} set to $RET ($v)"
@@ -4004,11 +4086,12 @@ help_lines() {
   hk "$n" "edit the colour of the entry"
   hk "l, $r" "the same, when the list has one column"
   hk "$sp" "fold or unfold the section"
-  hk "$n on a heading" "give every entry of the section one colour (one step for undo)"
+  hk "$n on a heading" "give every entry of the section (or colour) a new colour, one step for undo"
   hk "l, $r on a heading" "unfold it, or go to its first entry when it is open"
   hk "h, $l" "fold the section on a heading, or go to the heading from an entry"
   hk "" "(in the first column, when there are several)"
   hk "m" "several columns of names, or one column with pattern and colour"
+  hk "v" "section view, or palette view: the entries grouped by colour"
   hk "z / Z" "fold every section / unfold every section"
   hk "/" "search (pattern, sample name or section); Esc clears"
   hk "x" "show the codes instead of the colours in words"
@@ -4167,6 +4250,10 @@ cmd_edit() {
           e) move_column -1 ;;
           h) is_folded "${ROW_REF[T_CUR]}" || toggle_fold ;;
         esac ;;
+      v)
+        # section view and palette view; the cursor keeps its entry
+        if [[ $T_VIEW == section ]]; then T_VIEW=palette; else T_VIEW=section; fi
+        build_rows ;;
       m)
         T_MULTI=$(( ! T_MULTI ))
         build_flow

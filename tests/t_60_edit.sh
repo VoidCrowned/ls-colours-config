@@ -157,6 +157,13 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   tui "$F" -- 'k' '\r' 'l' '\r' 'n' 'q'
   is "$(cat "$F")" "$before" "...declining the question changes nothing"
   has "$OUT" "Give all 3 entries of archives the colour green? 3 of them change." "...the question names the colour and how many entries change"
+
+  # palette view: up to the heading of red, one colour to the right (green),
+  # accept, save
+  fresh pairs.dircolors
+  tui "$F" -- 'v' 'k' '\r' 'l' '\r' 's' 'y\n' '\n' 'q'
+  has "$OUT" "palette view" "v switches to the palette view"
+  is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 31${NL}.GZ 32${NL}.zip 32" "...where Enter on a colour recolours every entry of that colour"
 else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi
