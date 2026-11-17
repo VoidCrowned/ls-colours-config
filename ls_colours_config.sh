@@ -2711,7 +2711,7 @@ build_groups() {
       for q in ${E_LINES[i]}; do
         if (( q > last )); then last=$q v=${ST[q]-${L_VAL[q]}}; fi
       done
-      plain_colour "$v"
+      same_colour "$v"
       key=$RET
     else
       key=${E_SEC[i]:-other entries}
@@ -2770,7 +2770,7 @@ summarise() {
   local -A tally=() spelt=()
   for i in ${G_ENTRIES[g]}; do
     entry_values "$i"
-    plain_colour "$EV_EFF"
+    same_colour "$EV_EFF"
     key=k$RET
     tally[$key]=$(( ${tally[$key]:-0} + 1 ))
     [[ -n ${spelt[$key]+x} ]] || spelt[$key]=$EV_EFF
@@ -3004,6 +3004,21 @@ setup_glyphs() {
 setup_glyphs
 
 # --- colours in words --------------------------------------------------------
+
+# same_colour VALUE -> RET: one spelling for values that look the same, such
+# as 01;35, 1;35 and 00;01;35, so that the editor groups and compares them as
+# one colour. (check and fix keep their own, stricter comparison.)
+declare -A V_SAME=()
+same_colour() {
+  if [[ -n ${V_SAME[k$1]+x} ]]; then RET=${V_SAME[k$1]}; return; fi
+  sgr_parse "$1"
+  if [[ -n $SGR_BAD || -n $SGR_UNKNOWN ]]; then
+    RET=$1
+  else
+    sgr_compose "$SGR_FG" "$SGR_BG" "$SGR_ATTRS" "$SGR_EXTRA" 0 0
+  fi
+  V_SAME[k$1]=$RET
+}
 
 declare -A V_DESC=() V_HARD=()
 
@@ -3876,13 +3891,13 @@ stage_value() {
 # different with VALUE.
 count_changes() {
   local e n=0 v want
-  plain_colour "$2"
+  same_colour "$2"
   want=$RET
   for e in $1; do
     entry_values "$e"
     # 00;33 and 33 look the same and do not count as a change
     for v in "${EV_LIST[@]}"; do
-      plain_colour "$v"
+      same_colour "$v"
       if [[ $RET != "$want" ]]; then n=$(( n + 1 )); break; fi
     done
   done
@@ -4017,7 +4032,7 @@ open_picker() {
   if (( ! PK_TOUCHED )); then build_rows; return 1; fi
   stage_value "$PK_ENTRIES" "$v"
   # in the palette the group of the new colour takes the cursor
-  if (( PK_GRP >= 0 )) && [[ $T_VIEW == palette ]]; then plain_colour "$v"; CUR_ID="h:$RET"; fi
+  if (( PK_GRP >= 0 )) && [[ $T_VIEW == palette ]]; then same_colour "$v"; CUR_ID="h:$RET"; fi
   build_rows
   describe_value "$v"
   if (( PK_GRP >= 0 )); then
@@ -4077,7 +4092,7 @@ help_lines() {
   HELP=()
   # hk KEYS TEXT: one line, the keys padded in characters (printf would
   # count the bytes of the arrow symbols)
-  hk() { spaces "$(( 22 - ${#1} ))"; HELP+=("  $1$RET $2"); }
+  hk() { spaces "$(( 22 - ${#1} ))"; HELP+=("  $1$RET $TAB$2"); }
   HELP+=("Keys in the list")
   hk "$m, j k" "move one row"
   hk "$l $r, h l" "move across the columns, when there are several"
@@ -4118,11 +4133,33 @@ help_lines() {
   )
 }
 
+# help_rows W -> HELP_ROWS: the help screen in rows of at most W characters.
+# A description that does not fit goes on below itself.
+declare -a HELP_ROWS=()
+help_rows() {
+  local w=$1 line keys text
+  HELP_ROWS=()
+  help_lines
+  for line in "${HELP[@]}"; do
+    if [[ $line == *"$TAB"* ]]; then
+      keys=${line%%"$TAB"*} text=${line#*"$TAB"}
+      wrap_words "$text" "$(( w - ${#keys} ))"
+      HELP_ROWS+=("$keys${WRAP[0]}")
+      spaces "${#keys}"
+      for text in "${WRAP[@]:1}"; do HELP_ROWS+=("$RET$text"); done
+    else
+      wrap_words "$line" "$w"
+      [[ -z $line ]] && WRAP=("")
+      HELP_ROWS+=("${WRAP[@]}")
+    fi
+  done
+}
+
 # show_help: the help screen; it scrolls when the terminal is short.
 show_help() {
   local buf y line top=0 h=$(( ROWS - 5 )) n i ctx=$T_CTX
-  help_lines
-  n=${#HELP[@]}
+  help_rows "$(( COLS - 2 ))"
+  n=${#HELP_ROWS[@]}
   (( h < 1 )) && h=1
   T_CTX=help
   while :; do
@@ -4136,14 +4173,19 @@ show_help() {
     for (( y = 0; y < h; y++ )); do
       i=$(( top + y ))
       buf+="${ROW_AT}$(( y + 3 ))${ROW_TXT}"
-      (( i < n )) && buf+="  ${HELP[i]:0:$(( COLS - 2 > 0 ? COLS - 2 : 0 ))}"
+      (( i < n )) && buf+="  ${HELP_ROWS[i]:0:$(( COLS - 2 > 0 ? COLS - 2 : 0 ))}"
     done
     if (( n > h )); then line="$(( top + 1 ))-$(( top + h < n ? top + h : n ))/$n"; else line=""; fi
     render_footer "$COLS" help "$line"
     buf+="${ROW_AT}${ROWS}${ROW_TXT}$RET"
     emit_frame "$buf"
     while ! read_key 0.5; do
-      if (( RESIZED )); then RESIZED=0; term_size; screen_reset; h=$(( ROWS - 5 )); (( h < 1 )) && h=1; continue 2; fi
+      if (( RESIZED )); then
+        RESIZED=0; term_size; screen_reset
+        h=$(( ROWS - 5 )); (( h < 1 )) && h=1
+        help_rows "$(( COLS - 2 ))"; n=${#HELP_ROWS[@]}
+        continue 2
+      fi
       (( INTR )) && break 2
     done
     case $KEY in

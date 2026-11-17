@@ -483,3 +483,23 @@ is "${ROW_KIND[*]}" "h h h" "folding works the same"
 T_VIEW=section; build_rows
 is "${ROW_KIND[*]}" "h e e e h e e" "...and the section view keeps its own folds"
 T_VIEW=section
+
+group "edit: spellings of one colour"
+read_file "$FIX/spellings.dircolors"; ST=() UNDO=(); build_entries; F_LINE=(); map_findings
+T_VIEW=palette; CUR_ID=""; build_rows
+is "${#G_TITLE[@]}|${G_N[0]}" "1|3" "01;35, 1;35 and 00;01;35 are one colour in the palette"
+T_VIEW=section; build_rows
+is "${G_DIFF[0]}" 0 "...and in a section's summary"
+count_changes "${G_ENTRIES[0]}" "01;35"
+is "$RET" 0 "...and none of them counts as a change to 01;35"
+render_state
+
+group "edit: the help screen fits"
+# at 80 columns every word of every line is still there, and no row is wider
+help_lines
+want=$(printf '%s\n' "${HELP[@]}" | tr "$TAB" ' ' | tr -s ' ' '\n' | grep -v '^$' | sort)
+help_rows 78
+got=$(printf '%s\n' "${HELP_ROWS[@]}" | tr -s ' ' '\n' | grep -v '^$' | sort)
+is "$got" "$want" "at 80 columns long descriptions wrap and no word is lost"
+widest "$(printf '%s\n' "${HELP_ROWS[@]}")"
+ok "...and no row is wider than the screen" test "$RET" -le 78
