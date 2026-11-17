@@ -157,7 +157,7 @@ PK_REF=0 PK_OLD=31 PK_START=31 PK_FILE=31 T_FOCUS=picker T_CTX=picker
 picker_load 31
 frame_text
 has "$RET" "Foreground   red" "below $SPLIT_COLS columns the picker takes the place of the list"
-has "$RET" "arrows choose" "...with its own hints"
+has "$RET" "arrows choose" "...with its own hints (in ASCII: 'arrows', otherwise arrow symbols)"
 T_FOCUS=list T_CTX=list
 ROWS=12
 
@@ -207,8 +207,19 @@ has "$frame" "approximation" "split: the strips come with a note"
 layout; is "$T_LAYOUT" split "at 100 columns the picker opens beside the list"
 COLS=99; layout; is "$T_LAYOUT" full "below 100 columns it takes the whole screen"
 COLS=39; layout; is "$T_LAYOUT" small "below 40 columns the terminal is too small"
-COLS=100 ROWS=15; layout; is "$T_LAYOUT" small "...and so it is below 16 rows while the picker is open"
-T_FOCUS=list; layout; is "$T_LAYOUT" list "...while the list alone gets by with 10"
+COLS=100 ROWS=9; layout; is "$T_LAYOUT" small "...and below 10 rows"
+ROWS=10; layout; is "$T_LAYOUT" split "...10 rows are enough, also for the picker"
+render_picker 44 5
+is "${#RP_TXT[@]}" 5 "a picker in 10 rows scrolls instead of spilling over"
+has "$(printf '%s\n' "${RP_TXT[@]}")" "Foreground" "...and keeps the field with the focus in view"
+COLS=200 ROWS=24
+frame_text
+frame=$RET
+RET=$frame; columns_at 79
+is "${RET:1:3}" "+||" "on a wide screen the picker sits next to the list, not at the far edge"
+widest "$frame"; is "$RET" 200 "...and the rules still span the screen"
+OPT_256=1; frame_text; OPT_256=0
+widest "$RET"; ok "with --256 the picker pane is wider" test "$RET" -le 200
 T_FOCUS=picker
 COLS=30 ROWS=12
 frame_text

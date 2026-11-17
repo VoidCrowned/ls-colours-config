@@ -2849,11 +2849,11 @@ setup_glyphs() {
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▌" GL_OPEN="▾" GL_SHUT="▸"
     GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••"
-    GL_K_MOVE="↑↓" GL_K_ENTER="⏎" GL_K_SPACE="␣"
+    GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
     GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".."
-    GL_K_MOVE="up/down" GL_K_ENTER="Enter" GL_K_SPACE="Space"
+    GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
 setup_glyphs
@@ -2986,7 +2986,7 @@ render_footer() {
   local w=$1 pos=$3 out=" " len=1 h k l add room
   local -a hints=()
   case $2 in
-    picker) hints=("arrows|choose" "Tab|next field" "$GL_K_SPACE|toggle" "e|type a code"
+    picker) hints=("$GL_K_ARROWS|choose" "Tab|next field" "$GL_K_SPACE|toggle" "e|type a code"
                    "r|reset" "$GL_K_ENTER|accept" "Esc|cancel") ;;
     search) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     *)      hints=("$GL_K_MOVE|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "/|search" "u|undo" "s|save"
@@ -3136,16 +3136,17 @@ info_line() {
 #   split   the list on the left, the picker on the right (wide terminals)
 #   full    the picker alone (narrower terminals)
 #   small   a note that the terminal is too small
-SPLIT_COLS=100 MIN_COLS=40 MIN_ROWS=10 MIN_ROWS_PICKER=16 PANE_R=44
+# The list pane is never wider than LIST_W, so on a wide screen the picker
+# sits next to the list instead of at the far edge. The picker pane grows
+# to PANE_R_256 with --256, where a cube row of 36 cells fits.
+SPLIT_COLS=100 MIN_COLS=40 MIN_ROWS=10 PANE_R=44 PANE_R_256=80 LIST_W=78
 layout() {
   T_LAYOUT=list
   if (( COLS < MIN_COLS || ROWS < MIN_ROWS )); then
     T_LAYOUT="small"
   elif [[ $T_FOCUS == picker ]]; then
-    if (( ROWS < MIN_ROWS_PICKER )); then T_LAYOUT="small"
-    elif (( COLS >= SPLIT_COLS )); then T_LAYOUT="split"
-    else T_LAYOUT="full"
-    fi
+    # a short picker scrolls to keep the field with the focus in view
+    if (( COLS >= SPLIT_COLS )); then T_LAYOUT="split"; else T_LAYOUT="full"; fi
   fi
 }
 
@@ -3161,8 +3162,7 @@ compose_frame() {
     buf=""
     wrap_words "The terminal is too small for the editor." "$(( COLS - 2 ))"
     lines=("${WRAP[@]}" "")
-    if [[ $T_FOCUS == picker ]]; then r=$MIN_ROWS_PICKER; else r=$MIN_ROWS; fi
-    wrap_words "Please make it at least $MIN_COLS columns wide and $r rows high (it is $COLS x $ROWS now)." "$(( COLS - 2 ))"
+    wrap_words "Please make it at least $MIN_COLS columns wide and $MIN_ROWS rows high (it is $COLS x $ROWS now)." "$(( COLS - 2 ))"
     lines+=("${WRAP[@]}" "")
     if [[ $T_FOCUS == picker ]]; then wrap_words "Esc closes the colour picker." "$(( COLS - 2 ))"
     else wrap_words "q quits." "$(( COLS - 2 ))"
@@ -3179,14 +3179,21 @@ compose_frame() {
   buf="${ROW_AT}1${ROW_TXT}$RET"
   case $T_LAYOUT in
     split)
-      rw=$PANE_R lw=$(( COLS - PANE_R - 1 ))
+      lw=$(( COLS - PANE_R - 1 ))
+      (( lw > LIST_W )) && lw=$LIST_W
+      rw=$(( COLS - lw - 1 ))
+      if (( OPT_256 )); then (( rw > PANE_R_256 )) && rw=$PANE_R_256
+      else (( rw > PANE_R )) && rw=$PANE_R
+      fi
       LIST_DIM=1
       render_list "$lw" "$h"
       LIST_DIM=0
       render_picker "$rw" "$h"
-      # the pane with the focus has the bright rule
+      # every rule has the same colour; the focus shows in the bright
+      # labels of the picker and the dimmed cursor of the list
       rule "$lw"; lrule="${C_D}$RET${C_0}"
-      rule "$rw"; rrule="${C_C}$RET${C_0}"
+      # the rules run on to the edge of the screen when the panes end earlier
+      rule "$(( COLS - lw - 1 ))"; rrule="${C_D}$RET${C_0}"
       buf+="${ROW_AT}2${ROW_TXT}$lrule${C_D}$GL_TEE${C_0}$rrule"
       for (( r = 0; r < h; r++ )); do
         spaces "$(( lw - LP_LEN[r] ))"
@@ -3194,7 +3201,7 @@ compose_frame() {
       done
       buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$lrule${C_D}$GL_FOOT${C_0}$rrule" ;;
     full)
-      rule "$COLS"; line="${C_C}$RET${C_0}"
+      rule "$COLS"; line="${C_D}$RET${C_0}"
       buf+="${ROW_AT}2${ROW_TXT}$line"
       render_picker "$COLS" "$h"
       for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${RP_TXT[r]:-}"; done
