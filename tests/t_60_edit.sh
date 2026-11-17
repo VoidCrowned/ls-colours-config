@@ -122,10 +122,22 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   has "$OUT" "Foreground" "resizing: the picker is drawn"
   has "$OUT" "too small" "...a terminal that gets too small shows a note"
   is "$RC|$(cat "$F")" "0|$before" "...Esc still cancels and nothing is written"
-  tui "$F" -- '\r' 'l' '\r' '\003'
-  is "$RC" 130 "Ctrl-C ends the editor"
+  tui "$F" -- '\003'
+  is "$RC" 0 "Ctrl-C without changes quits at once"
+  has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"
+  tui "$F" -- '\r' 'l' '\r' '\003' 'n' 'j' '\003' '\003'
+  has "$OUT" "Quit without saving?" "Ctrl-C with unsaved changes asks"
+  is "$RC" 0 "...n stays, a second Ctrl-C at the question quits"
   has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"
   is "$(cat "$F")" "$before" "...without writing"
+  tui "$F" -- '\r' 'l' '\r' '\r' '\003' 'y'
+  has "$OUT" "Quit without saving?" "Ctrl-C in the picker closes it and asks too"
+  is "$RC|$(cat "$F")" "0|$before" "...y quits without writing"
+  tui "$F" -- '\r' 'l' 'q' 'q'
+  is "$RC|$(cat "$F")" "0|$before" "q in the picker cancels; nothing was staged, so q in the list quits at once"
+  tui "$F" -- '\r' '?' 'x' '\033' 'q'
+  has "$OUT" "Keys in the colour picker" "? opens the help from the picker"
+  is "$RC" 0 "...and the editor carries on afterwards"
 else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi

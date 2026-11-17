@@ -2485,7 +2485,7 @@ declare -a ST=()                     # staged values by line number
 declare -a UNDO=()                   # one record per change
 declare -a EV_LIST=()                # distinct values of the entry at hand
 EV_EFF="" EV_MOD=0
-T_CUR=0 T_TOP=0 T_FILTER="" T_MSG="" RESIZED=0 KEY=""
+T_CUR=0 T_TOP=0 T_FILTER="" T_MSG="" RESIZED=0 INTR=0 KEY=""
 T_RAW=0            # x: show codes instead of descriptions
 T_FOCUS=list       # list or picker: what the keys go to
 T_CTX=list         # which key hints the last row shows
@@ -2592,7 +2592,10 @@ line_input() {
   unset "FRAME[$(( ROWS - 1 ))]"
   while :; do
     printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K${C_B}$1${C_0}${text}${ESC}[?25h"
-    read_key 0.5 || continue
+    if ! read_key 0.5; then
+      if (( ! INTR )); then continue; fi
+      KEY=esc
+    fi
     case $KEY in
       enter)     break ;;
       esc|eof)   printf '%s' "${ESC}[?25l"; RET=""; return 1 ;;
@@ -2849,11 +2852,11 @@ setup_glyphs() {
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▌" GL_OPEN="▾" GL_SHUT="▸"
     GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••"
-    GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
+    GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
     GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".."
-    GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_ENTER="Enter" GL_K_SPACE="Space"
+    GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_LEFT="left" GL_K_RIGHT="right" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
 setup_glyphs
@@ -2986,11 +2989,12 @@ render_footer() {
   local w=$1 pos=$3 out=" " len=1 h k l add room
   local -a hints=()
   case $2 in
-    picker) hints=("$GL_K_ARROWS|choose" "Tab|next field" "$GL_K_SPACE|toggle" "e|type a code"
-                   "r|reset" "$GL_K_ENTER|accept" "Esc|cancel") ;;
-    search) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
-    *)      hints=("$GL_K_MOVE|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "/|search" "u|undo" "s|save"
-                   "?|help" "q|quit" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+    picker) hints=("$GL_K_ARROWS|choose" "Tab|next field" "$GL_K_SPACE|toggle" "$GL_K_ENTER|accept"
+                   "Esc q|cancel" "?|help" "e|type a code" "r|reset") ;;
+    prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
+    help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
+    *)      hints=("$GL_K_MOVE|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
+                   "s|save" "q|quit" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -3644,10 +3648,13 @@ open_picker() {
     fi
     if ! read_key 0.25; then
       if (( RESIZED )); then RESIZED=0; term_size; screen_reset; dirty=1; fi
-      continue
+      # Ctrl-C closes the picker; the list then asks whether to quit
+      if (( ! INTR )); then continue; fi
+      KEY=esc
     fi
     dirty=1
     case $KEY in
+      \?)     show_help ;;
       up|k)    picker_move -1 0 ;;
       down|j)  picker_move 1 0 ;;
       left|h)  picker_move 0 -1 ;;
@@ -3665,6 +3672,9 @@ open_picker() {
         picker_load "$PK_FILE"
         [[ $PK_FILE != "$PK_START" ]] && PK_TOUCHED=1 ;;
       e)
+        T_CTX=prompt
+        draw_screen
+        T_CTX=picker
         picker_value
         if line_input " SGR code (numbers joined by ;): " "$RET"; then
           sgr_parse "$RET"
@@ -3714,6 +3724,7 @@ save_staged() {
   if (( ! ${#ST[@]} )); then T_MSG="Nothing to save."; return; fi
   for i in "${!ST[@]}"; do set_value "$i" "${ST[i]}"; done
   tui_suspend
+  trap 'exit 130' INT
   if review_and_save; then
     read_file "$FILE_REAL"
     ST=() UNDO=()
@@ -3729,52 +3740,92 @@ save_staged() {
   fi
   printf '\nPress Enter to return to the editor. '
   IFS= read -r i
+  trap 'INTR=1' INT
   tui_start
   term_size
   build_rows
 }
 
-show_help() {
-  local buf y=3 line
-  local -a help_lines=(
-    "Keys in the list"
-    "  up / down, j / k     move            PgUp / PgDn, g / G   move further"
-    "  Enter, l             edit the colour of the entry"
-    "  Space                fold or unfold the section (also h / l on its heading)"
-    "  z / Z                fold every section / unfold every section"
-    "  /                    search (pattern, sample name or section); Esc clears"
-    "  x                    show the codes instead of the colours in words"
-    "  c                    join or separate case pairs such as .deb / .DEB"
-    "  u                    undo the last change"
-    "  s                    review the changes and save them"
-    "  q                    quit (asks when there are unsaved changes)"
-    ""
-    "Keys in the colour picker"
-    "  arrows, h / j / k / l   choose a colour or an attribute"
-    "  Tab                     next field (foreground, background, attributes)"
-    "  Space                   switch an attribute on or off"
-    "  e                       type an SGR code by hand"
-    "  r                       back to the colour in the file"
-    "  Enter                   accept          Esc   cancel"
-    "  The list shows the colour under the cursor while you choose. From $SPLIT_COLS"
-    "  columns on, the picker opens beside the list, otherwise in its place."
+# help_lines -> HELP: the text of the help screen, with the same key symbols
+# as the hints in the last row.
+declare -a HELP=()
+help_lines() {
+  local m=$GL_K_MOVE a=$GL_K_ARROWS l=$GL_K_LEFT r=$GL_K_RIGHT n=$GL_K_ENTER sp=$GL_K_SPACE
+  HELP=()
+  # hk KEYS TEXT: one line, the keys padded in characters (printf would
+  # count the bytes of the arrow symbols)
+  hk() { spaces "$(( 22 - ${#1} ))"; HELP+=("  $1$RET $2"); }
+  HELP+=("Keys in the list")
+  hk "$m, j k" "move one row"
+  hk "PgUp PgDn" "move one page"
+  hk "Home End, g G" "first or last row"
+  hk "$n, l, $r" "edit the colour of the entry"
+  hk "$sp" "fold or unfold the section ($n does the same on a heading)"
+  hk "l, $r on a heading" "unfold it, or go to its first entry when it is open"
+  hk "h, $l" "fold the section on a heading, or go to the heading from an entry"
+  hk "z / Z" "fold every section / unfold every section"
+  hk "/" "search (pattern, sample name or section); Esc clears"
+  hk "x" "show the codes instead of the colours in words"
+  hk "c" "join or separate case pairs such as .deb / .DEB"
+  hk "u" "undo the last change"
+  hk "s" "review the changes and save them"
+  hk "q, Ctrl-C" "quit (asks when there are unsaved changes)"
+  hk "?" "this help"
+  HELP+=("" "Keys in the colour picker")
+  hk "$a, h j k l" "choose a colour or an attribute"
+  hk "Tab / Shift-Tab" "next / previous field (foreground, background, attributes)"
+  hk "$sp" "switch an attribute on or off"
+  hk "e" "type an SGR code by hand"
+  hk "r" "back to the colour in the file"
+  hk "$n" "accept"
+  hk "Esc, q" "cancel"
+  hk "?" "this help"
+  HELP+=(""
+    "The list shows the colour under the picker's cursor while you choose. From"
+    "$SPLIT_COLS columns on, the picker opens beside the list, otherwise in its place."
     ""
     "Nothing is written until you press s, look at the diff and confirm."
     "A backup is made next to the file before the first write."
   )
-  render_header "$COLS"
-  buf="${ROW_AT}1${ROW_TXT}$RET"
-  rule "$COLS"
-  buf+="${ROW_AT}2${ROW_TXT}${C_D}$RET${C_0}"
-  for line in "${help_lines[@]}"; do
-    (( y < ROWS - 1 )) || break
-    buf+="${ROW_AT}${y}${ROW_TXT}  ${line:0:$(( COLS - 2 ))}"
-    y=$(( y + 1 ))
+}
+
+# show_help: the help screen; it scrolls when the terminal is short.
+show_help() {
+  local buf y line top=0 h=$(( ROWS - 5 )) n i ctx=$T_CTX
+  help_lines
+  n=${#HELP[@]}
+  (( h < 1 )) && h=1
+  T_CTX=help
+  while :; do
+    (( top > n - h )) && top=$(( n - h ))
+    (( top < 0 )) && top=0
+    render_header "$COLS"
+    buf="${ROW_AT}1${ROW_TXT}$RET"
+    rule "$COLS"
+    line="${C_D}$RET${C_0}"
+    buf+="${ROW_AT}2${ROW_TXT}$line${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}"
+    for (( y = 0; y < h; y++ )); do
+      i=$(( top + y ))
+      buf+="${ROW_AT}$(( y + 3 ))${ROW_TXT}"
+      (( i < n )) && buf+="  ${HELP[i]:0:$(( COLS - 2 > 0 ? COLS - 2 : 0 ))}"
+    done
+    if (( n > h )); then line="$(( top + 1 ))-$(( top + h < n ? top + h : n ))/$n"; else line=""; fi
+    render_footer "$COLS" help "$line"
+    buf+="${ROW_AT}${ROWS}${ROW_TXT}$RET"
+    emit_frame "$buf"
+    while ! read_key 0.5; do
+      if (( RESIZED )); then RESIZED=0; term_size; screen_reset; h=$(( ROWS - 5 )); (( h < 1 )) && h=1; continue 2; fi
+      (( INTR )) && break 2
+    done
+    case $KEY in
+      up|k)   top=$(( top - 1 )) ;;
+      down|j) top=$(( top + 1 )) ;;
+      pgup)   top=$(( top - h )) ;;
+      pgdn)   top=$(( top + h )) ;;
+      *)      break ;;
+    esac
   done
-  for (( ; y < ROWS; y++ )); do buf+="${ROW_AT}${y}${ROW_TXT}"; done
-  buf+="${ROW_AT}${ROWS}${ROW_TXT} ${C_B}any key${C_0} ${C_D}back${C_0}"
-  emit_frame "$buf"
-  while ! read_key 0.5; do :; done
+  T_CTX=$ctx
 }
 
 help_edit() {
@@ -3793,9 +3844,10 @@ Options:
   --ascii            draw with ASCII characters only (the default when the
                      locale is not UTF-8)
 
-Keys: arrows or h/j/k/l, Enter to edit, / to search, x to switch between
-colours in words and codes, u to undo, s to save, q to quit, ? for the full
-list.
+Keys: arrows or h/j/k/l to move, Enter to edit, Space to fold a section,
+z / Z to fold or unfold all, / to search, x to switch between colours in
+words and codes, c for case pairs, u to undo, s to save, q to quit, ? for
+the full list.
 
 edit only changes entries that exist. Adding entries and reorganising the
 file is the job of fix.
@@ -3826,9 +3878,14 @@ cmd_edit() {
   build_rows
   tui_start
   trap 'RESIZED=1' WINCH
+  trap 'INTR=1' INT
   draw_screen
   while :; do
-    if ! read_key 0.25; then
+    # Ctrl-C, also when it came while the picker, a prompt or the help
+    # was open, is handled like q
+    if (( INTR )); then
+      KEY=quit
+    elif ! read_key 0.25; then
       if (( RESIZED )); then RESIZED=0; term_size; screen_reset; draw_screen; fi
       continue
     fi
@@ -3863,7 +3920,7 @@ cmd_edit() {
       z)       cursor_group && CUR_ID="h:${G_TITLE[RET]}"; fold_all 1; build_rows ;;
       Z)       fold_all 0; build_rows ;;
       /)
-        T_CTX=search
+        T_CTX=prompt
         draw_screen
         T_CTX=list
         if line_input " search: " "$T_FILTER"; then
@@ -3883,11 +3940,17 @@ cmd_edit() {
       u) undo_last ;;
       s) save_staged ;;
       \?) show_help ;;
-      q|eof)
-        if (( ${#ST[@]} )) && [[ $KEY == q ]]; then
+      q|quit|eof)
+        # q and Ctrl-C ask when there are unsaved changes; Ctrl-C once
+        # more at the question quits
+        INTR=0
+        if (( ${#ST[@]} )) && [[ $KEY != eof ]]; then
           printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K ${C_Y}${#ST[@]} unsaved changes. Quit without saving? [y/N]${C_0} "
           unset "FRAME[$(( ROWS - 1 ))]"
-          while ! read_key 0.5; do :; done
+          while ! read_key 0.5; do
+            if (( INTR )); then KEY=y; break; fi
+          done
+          INTR=0
           [[ $KEY == y || $KEY == Y ]] && break
         else
           break

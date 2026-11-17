@@ -123,10 +123,10 @@ has "$RET" "1 unsaved" "the header counts staged changes"
 is "${#RET}" 90 "...and fills the width exactly"
 ST=()
 plain render_footer 60 list 1/5
-is "$RET" " up/down move   Enter edit   Space fold   / search      1/5 " "hints that do not fit are left out; the position is on the right"
+is "$RET" " up/down move   Enter edit   Space fold   ? help        1/5 " "hints that do not fit are left out; the position is on the right"
 plain render_footer 60 picker ""
 has "$RET" "Tab next field" "the picker has hints of its own"
-plain render_footer 60 search ""
+plain render_footer 60 prompt ""
 has "$RET" "Esc cancel" "...and so has the search"
 
 group "edit: the whole screen"
@@ -143,7 +143,7 @@ is "$RET" " ls_colours_config.sh - pairs.dircolors           0 unsaved
      example.jpg       .jpg            magenta
 ------------------------------------------------------------
 
- up/down move   Enter edit   Space fold   / search      1/5 " "header, rule, list, rule, message row, key hints"
+ up/down move   Enter edit   Space fold   ? help        1/5 " "header, rule, list, rule, message row, key hints"
 T_FILTER=png CUR_ID=""; build_rows
 frame_text
 has "$RET" " filter: png  (Esc clears)" "an active filter is shown above the hints"
@@ -281,3 +281,46 @@ is "$(grid_rows_n 1; printf %s "$RET")" 9 "full width: 2 rows of 16 colours, 6 o
 PK_CW=18
 is "$(grid_rows_n 1; printf %s "$RET")" 16 "in the pane: 2, 12 and 2"
 OPT_256=0 PK_CW=36
+
+group "edit: every key is described"
+# Every key the list, the picker and the help screen react to must appear in
+# the help screen, so that a new key cannot be added without describing it.
+OPT_ASCII=1; setup_glyphs
+help_lines
+helptext=$(printf '%s\n' "${HELP[@]}")
+undocumented=""
+while IFS= read -r label; do
+  label=${label//[[:space:]]/}
+  label=${label%)}
+  IFS='|' read -r -a keys <<<"$label"
+  for k in "${keys[@]}"; do
+    case $k in
+      eof|'*') continue ;;
+      up|down) doc="up/down" ;;
+      left|right|pgup|pgdn|home|end|enter|tab|esc|space)
+        case $k in
+          left) doc="left" ;; right) doc="right" ;; pgup) doc="PgUp" ;; pgdn) doc="PgDn" ;;
+          home) doc="Home" ;; end) doc="End" ;; enter) doc="Enter" ;; tab) doc="Tab" ;;
+          esc) doc="Esc" ;; space) doc="Space" ;;
+        esac ;;
+      backtab) doc="Shift-Tab" ;;
+      quit)    doc="Ctrl-C" ;;
+      '\?')    doc="?" ;;
+      *)       doc=$k ;;
+    esac
+    found=0
+    if (( ${#doc} == 1 )); then
+      [[ $helptext =~ (^|[ ,/])"$doc"([ ,/]|$) ]] && found=1
+    else
+      [[ $helptext == *"$doc"* ]] && found=1
+    fi
+    (( found )) || undocumented+=" $k"
+  done
+done < <(declare -f cmd_edit open_picker show_help | grep -E '^\s*[^ ()]+( \| [^ ()]+)*\)$')
+is "$undocumented" "" "every key the editor handles is in the help screen"
+plain render_footer 200 picker ""
+has "$RET" "Esc q cancel" "the picker's hints name q next to Esc"
+plain render_footer 60 list ""
+has "$RET" "? help" "the list's hints keep ? even at 60 columns"
+plain render_footer 200 prompt ""
+is "${RET%% *([[:space:]])}" " Enter apply   Esc cancel" "while a code or a search is typed, the hints say how to finish"
