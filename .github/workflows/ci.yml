@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck --version
-      - run: shellcheck ls_colours_config tests/run.sh
+      - run: shellcheck ls_colours_config.sh tests/run.sh
       # The test files are fragments sourced by run.sh: no shebang, and their
       # variables are defined and used in other files.
       - run: shellcheck -s bash -e SC2148,SC2034,SC2154 tests/t_*.sh

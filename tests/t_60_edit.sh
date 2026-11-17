@@ -91,4 +91,4 @@ else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi
 run edit --help
-has "$OUT" "Usage: ls_colours_config edit" "edit --help"
+has "$OUT" "Usage: ls_colours_config.sh edit" "edit --help"

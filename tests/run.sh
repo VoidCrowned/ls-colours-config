@@ -14,7 +14,7 @@
 
 cd "$(dirname "$0")/.." || exit 1
 ROOT=$PWD
-SCRIPT="$ROOT/ls_colours_config"
+SCRIPT="$ROOT/ls_colours_config.sh"
 FIX="$ROOT/tests/fixtures"
 JSON=0
 [[ ${1:-} == --json ]] && JSON=1
@@ -25,7 +25,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/lscc-test.XXXXXX") || exit 1
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 # Source the script for its functions; main does not run when sourced.
-# shellcheck source=../ls_colours_config
+# shellcheck source=../ls_colours_config.sh
 source "$SCRIPT"
 OPT_COLOUR=never
 setup_colour

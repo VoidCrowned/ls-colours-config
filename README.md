@@ -9,14 +9,14 @@ My terminal tool for the file that decides the colours of `ls`: it previews, che
 Copy the one file somewhere on your `PATH` and make it executable:
 
 ```sh
-curl -fsSLo ~/.local/bin/ls_colours_config https://raw.githubusercontent.com/VoidCrowned/ls_colours_config/main/ls_colours_config
-chmod +x ~/.local/bin/ls_colours_config
+curl -fsSLo ~/.local/bin/ls_colours_config.sh https://raw.githubusercontent.com/VoidCrowned/ls_colours_config/main/ls_colours_config.sh
+chmod +x ~/.local/bin/ls_colours_config.sh
 ```
 
 ## Usage
 
 ```sh
-ls_colours_config COMMAND [OPTIONS] [FILE]
+ls_colours_config.sh COMMAND [OPTIONS] [FILE]
 ```
 
 Without `FILE` it takes the first that exists of `$XDG_CONFIG_HOME/dircolors`, `$XDG_CONFIG_HOME/.dir_colors`, `~/.dir_colors`, `~/.dircolors`. If there is none, it offers to create one from the built-in sample ([examples/dircolors.sample](examples/dircolors.sample)).
@@ -42,7 +42,7 @@ A linter. It exits with 0 when the file is clean and 1 when it found something, 
 - entries whose colour differs from the one at least 80 % of their category have
 - file types that are not set and common patterns without a colour
 
-`--ignore LIST` skips kinds of findings; `ls_colours_config help check` lists the names.
+`--ignore LIST` skips kinds of findings; `ls_colours_config.sh help check` lists the names.
 
 ### `fix`
 

@@ -2,11 +2,11 @@
 
 group "command line"
 run --version
-has "$OUT" "ls_colours_config 0." "--version"
+has "$OUT" "ls_colours_config.sh 0." "--version"
 run --help
-has "$OUT" "Usage: ls_colours_config COMMAND" "--help"
+has "$OUT" "Usage: ls_colours_config.sh COMMAND" "--help"
 run help fix
-has "$OUT" "Usage: ls_colours_config fix" "help COMMAND"
+has "$OUT" "Usage: ls_colours_config.sh fix" "help COMMAND"
 run
 is "$RC" 2 "no command is a usage error"
 run frobnicate
