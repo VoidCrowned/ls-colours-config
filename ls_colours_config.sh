@@ -2549,21 +2549,32 @@ tui_suspend() {
 }
 
 # read_key TIMEOUT: wait for a key and name it in KEY. Returns 1 on timeout.
+# A key that came right after Esc is kept in KEY_NEXT for the next call, so
+# that Esc and q typed quickly (or arriving together) are two keys.
+KEY_NEXT=""
 read_key() {
   local c="" d="" seq="" rc
   KEY=""
-  IFS= read -rsn1 -t "$1" c
-  rc=$?
+  if [[ -n $KEY_NEXT ]]; then
+    c=$KEY_NEXT rc=0 KEY_NEXT=""
+  else
+    IFS= read -rsn1 -t "$1" c
+    rc=$?
+  fi
   if (( rc > 128 )); then return 1; fi
   if (( rc != 0 )); then KEY=eof; return 0; fi
   case $c in
-    "")      KEY=enter ;;
+    ""|"$NL") KEY=enter ;;
     "$TAB")  KEY=tab ;;
     " ")     KEY=space ;;
     $'\177'|$'\b') KEY=backspace ;;
     "$ESC")
       if ! IFS= read -rsn1 -t 0.05 d; then KEY=esc; return 0; fi
-      if [[ $d != "[" && $d != O ]]; then KEY=esc; return 0; fi
+      if [[ $d != "[" && $d != O ]]; then
+        # an empty character is Enter; it is kept as a newline
+        KEY=esc KEY_NEXT=${d:-$NL}
+        return 0
+      fi
       while IFS= read -rsn1 -t 0.05 d; do
         seq+=$d
         [[ $d == [A-Za-z~] ]] && break
@@ -3481,6 +3492,9 @@ render_picker() {
   value=$RET
   # what is being edited, and where it lives
   title=${E_LABEL[ref]} sec=${E_SEC[ref]}
+  if (( PK_GRP >= 0 )); then
+    title="all of ${G_TITLE[PK_GRP]}" sec="${G_N[PK_GRP]} entries"
+  fi
   (( ${#sec} > w / 3 )) && sec=${sec:0:$(( w / 3 ))}
   (( ${#title} > w - ${#sec} - 5 )) && title=${title:0:$(( w - ${#sec} - 5 > 0 ? w - ${#sec} - 5 : 0 ))}
   spaces "$(( w - ${#title} - ${#sec} - 3 ))"
@@ -3499,7 +3513,10 @@ render_picker() {
   rp_add "$line"
   wrap_words "The strips are an approximation: your terminal's own background is what counts." "$(( w - 4 ))"
   for line in "${WRAP[@]}"; do rp_add "  ${C_D}$line${C_0}" 2; done
-  if [[ $PK_OLD == *"|"* ]]; then
+  if (( PK_GRP >= 0 && PK_GDIFF )); then
+    wrap_words "$PK_GDIFF of the entries have another colour; accepting gives all of them this one." "$(( w - 4 ))"
+    for line in "${WRAP[@]}"; do rp_add "  ${C_Y}$line${C_0}"; done
+  elif [[ $PK_OLD == *"|"* ]]; then
     wrap_words "The spellings of this entry have different colours; accepting sets all of them." "$(( w - 4 ))"
     for line in "${WRAP[@]}"; do rp_add "  ${C_Y}$line${C_0}"; done
   fi
@@ -3618,24 +3635,80 @@ file_value() {
 
 # preview_set: show what the picker stands for in the list while it is open.
 preview_set() {
+  local i
   PV=()
   if (( PK_TOUCHED )); then
     picker_value
-    PV[$PK_REF]=$RET
+    for i in $PK_ENTRIES; do PV[$i]=$RET; done
   fi
-  summarise "${E_GRP[PK_REF]}"
+  if (( PK_GRP >= 0 )); then summarise "$PK_GRP"; else summarise "${E_GRP[PK_REF]}"; fi
 }
 
-# open_picker ENTRY: edit one entry. Stages the result on Enter.
+# stage_value ENTRIES VALUE: give every line of the entries VALUE, as one
+# step that undo takes back as a whole.
+stage_value() {
+  local e i v=$2 record=""
+  for e in $1; do
+    for i in ${E_LINES[e]}; do
+      if [[ -n ${ST[i]+x} ]]; then record+="$i=V${ST[i]}$NL"; else record+="$i=U$NL"; fi
+      if [[ $v == "${L_VAL[i]}" ]]; then unset "ST[$i]"; else ST[i]=$v; fi
+    done
+  done
+  [[ -n $record ]] && UNDO+=("${record%"$NL"}")
+}
+
+# count_changes ENTRIES VALUE -> RET: how many of the entries would look
+# different with VALUE.
+count_changes() {
+  local e n=0
+  for e in $1; do
+    entry_values "$e"
+    if (( ${#EV_LIST[@]} > 1 )) || [[ $EV_EFF != "$2" ]]; then n=$(( n + 1 )); fi
+  done
+  RET=$n
+}
+
+# ask_yes QUESTION: a yes/no question on the message row; only y is yes.
+ask_yes() {
+  printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K ${C_Y}$1 [y/N]${C_0} "
+  unset "FRAME[$(( ROWS - 1 ))]"
+  while ! read_key 0.5; do
+    if (( INTR )); then INTR=0; return 1; fi
+  done
+  [[ $KEY == y || $KEY == Y ]]
+}
+
+# open_picker ENTRY [GROUP]: edit one entry, or with GROUP every entry of a
+# group (ENTRY is then the first of them). Stages the result on Enter.
+PK_GRP=-1 PK_ENTRIES="" PK_GDIFF=0
 open_picker() {
-  local ref=$1 old v i record="" codes=(1 2 4 7 5) a dirty=1
-  entry_values "$ref"
-  PK_START=$EV_EFF
-  old=$PK_START
-  (( ${#EV_LIST[@]} > 1 )) && old=$(IFS='|'; printf '%s' "${EV_LIST[*]}")
-  old=${old//|/ | }
-  file_value "$ref"
-  PK_FILE=$RET
+  local ref=$1 old v codes=(1 2 4 7 5) a dirty=1 e c
+  local -A tally=()
+  PK_GRP=${2:--1}
+  if (( PK_GRP >= 0 )); then
+    summarise "$PK_GRP"
+    PK_ENTRIES=${G_ENTRIES[PK_GRP]}
+    PK_START=${G_MAJ[PK_GRP]} PK_GDIFF=${G_DIFF[PK_GRP]}
+    old=$PK_START
+    (( PK_GDIFF )) && old+=" ($PK_GDIFF differ)"
+    # the colour most of them have in the file
+    PK_FILE="" a=0
+    for e in $PK_ENTRIES; do
+      file_value "$e"
+      c=$(( ${tally[k$RET]:-0} + 1 ))
+      tally[k$RET]=$c
+      if (( c > a )); then a=$c PK_FILE=$RET; fi
+    done
+  else
+    PK_ENTRIES=" $ref"
+    entry_values "$ref"
+    PK_START=$EV_EFF
+    old=$PK_START
+    (( ${#EV_LIST[@]} > 1 )) && old=$(IFS='|'; printf '%s' "${EV_LIST[*]}")
+    old=${old//|/ | }
+    file_value "$ref"
+    PK_FILE=$RET
+  fi
   PK_REF=$ref PK_OLD=$old
   picker_load "$PK_START"
   PK_FIELD=0 PK_AT=0 T_MSG=""
@@ -3690,19 +3763,40 @@ open_picker() {
       esc|q|eof) PV=(); T_FOCUS=list T_CTX=list; build_rows; return 1 ;;
     esac
   done
-  PV=()
   T_FOCUS=list T_CTX=list
+  # a group that was not of one colour: say how many entries change, and
+  # ask, with the new colours still showing in the list
+  if (( PK_TOUCHED || PK_GRP >= 0 )); then
+    picker_value
+    v=$RET
+    # counted against the colours without the preview
+    PV=()
+    count_changes "$PK_ENTRIES" "$v"
+    a=$RET
+    preview_set
+    if (( PK_GRP >= 0 && PK_GDIFF && a )); then
+      describe_value "$v"
+      e=$RET
+      PK_TOUCHED=1
+      draw_screen
+      if ! ask_yes "Give all ${G_N[PK_GRP]} entries of ${G_TITLE[PK_GRP]} the colour $e? $a of them change."; then
+        PV=()
+        build_rows
+        T_MSG="Nothing changed."
+        return 1
+      fi
+    fi
+  fi
+  PV=()
   if (( ! PK_TOUCHED )); then build_rows; return 1; fi
-  picker_value
-  v=$RET
-  for i in ${E_LINES[ref]}; do
-    if [[ -n ${ST[i]+x} ]]; then record+="$i=V${ST[i]}$NL"; else record+="$i=U$NL"; fi
-    if [[ $v == "${L_VAL[i]}" ]]; then unset "ST[$i]"; else ST[i]=$v; fi
-  done
-  UNDO+=("${record%"$NL"}")
+  stage_value "$PK_ENTRIES" "$v"
   build_rows
   describe_value "$v"
-  T_MSG="${E_LABEL[ref]} set to $RET ($v)"
+  if (( PK_GRP >= 0 )); then
+    T_MSG="${G_TITLE[PK_GRP]}: $a entries set to $RET ($v), one step for undo"
+  else
+    T_MSG="${E_LABEL[ref]} set to $RET ($v)"
+  fi
   return 0
 }
 
@@ -3760,7 +3854,8 @@ help_lines() {
   hk "PgUp PgDn" "move one page"
   hk "Home End, g G" "first or last row"
   hk "$n, l, $r" "edit the colour of the entry"
-  hk "$sp" "fold or unfold the section ($n does the same on a heading)"
+  hk "$sp" "fold or unfold the section"
+  hk "$n on a heading" "give every entry of the section one colour (one step for undo)"
   hk "l, $r on a heading" "unfold it, or go to its first entry when it is open"
   hk "h, $l" "fold the section on a heading, or go to the heading from an entry"
   hk "z / Z" "fold every section / unfold every section"
@@ -3902,7 +3997,10 @@ cmd_edit() {
       enter)
         case ${ROW_KIND[T_CUR]:-} in
           e) open_picker "${ROW_REF[T_CUR]}" ;;
-          h) toggle_fold ;;
+          h)
+            # the whole group
+            RET=${G_ENTRIES[${ROW_REF[T_CUR]}]# }
+            open_picker "${RET%% *}" "${ROW_REF[T_CUR]}" ;;
         esac ;;
       l|right)
         # on a heading: unfold, then step into the group

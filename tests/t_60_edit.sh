@@ -83,17 +83,24 @@ is "$(LC_ALL=C LANG=C "$BASH" -c 'source "$1"; printf %s "$PK_MARK"' _ "$SCRIPT"
 # shellcheck disable=SC2016
 is "$(LC_ALL=C.UTF-8 "$BASH" -c 'source "$1"; printf %s "$PK_MARK"' _ "$SCRIPT")" "▐▌" "the mark is a solid square in a UTF-8 locale"
 
+group "edit: keys"
+keys() { local out=""; while read_key 0.2 && [[ $KEY != eof ]]; do out+="$KEY "; done; RET=$out; }
+keys < <(printf '\033q\033\n\033[Aj')
+is "$RET" "esc q esc enter up j " "a key typed right after Esc is not lost"
+KEY_NEXT=""
+
 group "edit: in a terminal"
 run edit "$FIX/pairs.dircolors" </dev/null
 is "$RC" 2 "refuses to start without a terminal"
 if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
-  # keys ARGS -- KEY...: run edit in a pseudo-terminal, one key group every 0.4 s
+  # keys ARGS -- KEY...: run edit in a pseudo-terminal, one key group every
+  # 0.4 s; an editor that does not quit is stopped after 40 s (status 124)
   tui() {
     local args=() k
     while [[ $1 != -- ]]; do args+=("$1"); shift; done
     shift
-    OUT=$({ sleep 0.6; for k in "$@"; do printf '%b' "$k"; sleep 0.4; done; } |
-      TERM=xterm script -qec "stty rows 30 cols 100; '$BASH' '$SCRIPT' edit ${args[*]}" /dev/null 2>&1)
+    OUT=$({ sleep 1; for k in "$@"; do printf '%b' "$k"; sleep 0.4; done; } |
+      TERM=xterm timeout 40 script -qec "stty rows 30 cols 100; '$BASH' '$SCRIPT' edit ${args[*]}" /dev/null 2>&1)
     RC=$?
   }
   fresh pairs.dircolors
@@ -116,7 +123,7 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   is "$(cat "$F")" "$before" "--dry-run never writes"
   # the terminal shrinks and grows again while the picker is open
   OUT=$({ sleep 0.8; printf '\r'; sleep 0.5; printf 'l'; sleep 3.6; printf '\033'; sleep 0.5; printf 'q'; sleep 0.3; printf 'y'; } |
-    TERM=xterm script -qec "stty rows 30 cols 110; (sleep 1.6; stty cols 80 rows 24 </dev/tty; sleep 1; stty cols 30 rows 12 </dev/tty; sleep 1; stty cols 110 rows 30 </dev/tty) </dev/null & exec '$BASH' '$SCRIPT' edit '$F'" /dev/null 2>&1)
+    TERM=xterm timeout 40 script -qec "stty rows 30 cols 110; (sleep 1.6; stty cols 80 rows 24 </dev/tty; sleep 1; stty cols 30 rows 12 </dev/tty; sleep 1; stty cols 110 rows 30 </dev/tty) </dev/null & exec '$BASH' '$SCRIPT' edit '$F'" /dev/null 2>&1)
   RC=$?
   # the output is long, and the texts looked for are each written in one piece
   has "$OUT" "Foreground" "resizing: the picker is drawn"
@@ -138,6 +145,18 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   tui "$F" -- '\r' '?' 'x' '\033' 'q'
   has "$OUT" "Keys in the colour picker" "? opens the help from the picker"
   is "$RC" 0 "...and the editor carries on afterwards"
+
+  # Enter on the heading of the archives (the cursor starts on the first
+  # entry, k goes up to it), one colour to the right, accept, confirm
+  # (the section was not of one colour), save
+  fresh pairs.dircolors
+  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n' '\n' 'q'
+  is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 32${NL}.GZ 32${NL}.zip 32" "a whole section gets one colour"
+  fresh pairs.dircolors
+  before=$(cat "$F")
+  tui "$F" -- 'k' '\r' 'l' '\r' 'n' 'q'
+  is "$(cat "$F")" "$before" "...declining the question changes nothing"
+  has "$OUT" "Give all 3 entries of archives the colour green? 3 of them change." "...the question names the colour and how many entries change"
 else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi

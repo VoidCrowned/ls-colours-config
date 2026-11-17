@@ -180,7 +180,7 @@ render_state
 # open_picker without its key loop: the state it sets up
 picker_open_state() {
   entry_values "$1"
-  PK_START=$EV_EFF PK_OLD=$EV_EFF PK_REF=$1
+  PK_START=$EV_EFF PK_OLD=$EV_EFF PK_REF=$1 PK_ENTRIES=" $1" PK_GRP=-1
   file_value "$1"; PK_FILE=$RET
   picker_load "$PK_START"
   PK_FIELD=0 PK_AT=0 T_FOCUS=picker T_CTX=picker
@@ -324,3 +324,35 @@ plain render_footer 60 list ""
 has "$RET" "? help" "the list's hints keep ? even at 60 columns"
 plain render_footer 200 prompt ""
 is "${RET%% *([[:space:]])}" " Enter apply   Esc cancel" "while a code or a search is typed, the hints say how to finish"
+
+group "edit: a whole section at once"
+render_state
+stage_value " 0 1 2" 33
+is "${#UNDO[@]}|${ST[2]}|${ST[3]}|${ST[4]}|${ST[5]}|${ST[6]}" "1|33|33|33|33|33" "colouring a section stages every line of every entry as one step"
+count_changes " 0 1 2" 33
+is "$RET" 0 "...after which nothing would change any more"
+count_changes " 0 1 2" 31
+is "$RET" 3 "every entry counts that would look different"
+undo_last
+is "${#UNDO[@]}|${#ST[@]}" "0|0" "one undo takes the whole section back"
+stage_value " 0" 32; stage_value " 0 1 2" 34
+undo_last
+is "${#UNDO[@]}|${ST[2]}|${ST[3]}|${ST[4]:-none}" "1|32|32|none" "...and leaves the change before it in place"
+undo_last
+# the picker for a section: title, entry count, how many differ, live preview
+CUR_ID="h:archives"; build_rows
+summarise 0
+# G_ENTRIES comes from the script, which shellcheck does not follow here
+# shellcheck disable=SC2153
+PK_GRP=0 PK_ENTRIES=${G_ENTRIES[0]} PK_REF=0 PK_START=${G_MAJ[0]} PK_GDIFF=${G_DIFF[0]} PK_OLD="31 (1 differ)" PK_FILE=31
+picker_load 31; PK_FIELD=0; T_FOCUS=picker T_CTX=picker
+picker_move 0 2
+preview_set
+COLS=100 ROWS=24
+frame_text
+has "$RET" "all of archives" "the picker for a section names it"
+has "$RET" "3 entries" "...and how many entries it has"
+has "$RET" "1 of the entries have another colour" "...and how many differ"
+has "$RET" ">- archives     3   yellow" "the section's summary follows the picker"
+has "$RET" "example.gz        .gz / .GZ       * -> yellow" "...and so do all of its entries"
+PV=() PK_GRP=-1 T_FOCUS=list T_CTX=list; build_rows
