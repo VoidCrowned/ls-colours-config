@@ -1,0 +1,32 @@
+# edit: colours in words.
+
+group "edit: colours in words"
+d() { describe_value "$1"; is "$RET" "$2" "$3"; }
+d "31" "red" "a plain colour"
+d "00;33" "yellow" "a leading reset says nothing"
+d "01;31;07" "red, bold, reverse" "attributes follow the colour"
+d "94;40" "bright blue on black" "foreground on background"
+d "44" "default on blue" "a background alone"
+d "38;5;208" "colour 208" "a 256-colour code"
+d "48;5;17" "default on colour 17" "a 256-colour background"
+d "38;2;255;128;0" "#ff8000" "a 24-bit colour"
+d "38;2;1;2;3;48;2;0;0;255" "#010203 on #0000ff" "24-bit foreground and background"
+d "00" "default" "no colour at all"
+d "01;04" "bold, underline" "attributes alone"
+d "01;02;04;05;07;35" "magenta, bold, dim, underline, blink, reverse" "every attribute"
+d "03;31" "red, italic" "codes without a switch in the picker are named"
+d "31;;1" "not a valid code: 31;;1" "an empty field"
+d "red" "not a valid code: red" "a word"
+d "" "not a valid code: empty" "nothing"
+d "38;5;999" "not a valid code: 38;5;999" "a colour number that does not exist"
+is "${V_DESC[k31]}" "red" "descriptions are remembered"
+
+hard() { if hard_to_read "$1"; then RET=yes; else RET=no; fi; is "$RET" "$2" "$3"; }
+hard "30" yes "black on the default background is hard to read"
+hard "30;47" no "...but not on a light background"
+hard "02;37" yes "dim"
+hard "08" yes "concealed"
+hard "05" yes "blink and nothing else"
+hard "05;31" no "blink with a colour"
+hard "31;41" yes "foreground and background alike"
+hard "01;34" no "an ordinary colour"
