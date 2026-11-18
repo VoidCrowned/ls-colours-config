@@ -745,7 +745,34 @@ make_diff() {
   done
 }
 
-# print_diff: show the pending changes with two lines of context.
+# diff_text LINE -> RET: a line as the diff shows it. With colours on, an
+# entry is its pattern or keyword drawn in its own colours, without the code;
+# a comment behind it stays, dimmed. Anything else is the line as it is.
+diff_text() {
+  local line=$1 key val rest note=""
+  RET=$line
+  (( USE_COLOUR )) || return 0
+  [[ $line =~ $RE_COMMENT || $line =~ $RE_BLANK ]] && return 0
+  [[ $line =~ $RE_ENTRY ]] || return 0
+  key=${BASH_REMATCH[2]} rest=${BASH_REMATCH[4]}
+  if [[ $key == [.*]* ]]; then
+    :
+  elif [[ -n ${TYPE_CODE[$key]:-} ]]; then
+    [[ " $TYPES_RAW " == *" ${TYPE_CODE[$key]} "* ]] && return 0
+  else
+    return 0
+  fi
+  val=${rest%%#*}
+  [[ $rest == *"#"* ]] && note="#${rest#*#}"
+  val=${val%"${val##*[![:space:]]}"}
+  [[ $val =~ $RE_SGR ]] || return 0
+  paint "$val" "$key"
+  [[ -n $note ]] && RET+=" ${C_D}$note${C_0}"
+  return 0
+}
+
+# print_diff: show the pending changes with two lines of context. The signs
+# and line numbers are green and red; the entries show their colours.
 print_diff() {
   local idx k a b show last=-1 total
   local -a near=()
@@ -772,9 +799,15 @@ print_diff() {
     fi
     last=$idx
     case $k in
-      =) printf '  %4s  %s\n' "$a" "${ORIG[a]}" ;;
-      -) printf '%s- %4s  %s%s\n' "$C_R" "$a" "${ORIG[a]}" "$C_0" ;;
-      +) printf '%s+ %4s  %s%s\n' "$C_G" "$b" "${SRC[b]}" "$C_0" ;;
+      =) diff_text "${ORIG[a]}"; printf '  %4s  %s\n' "$a" "$RET" ;;
+      -)
+        diff_text "${ORIG[a]}"
+        if [[ $RET == "${ORIG[a]}" ]]; then RET="$C_R$RET$C_0"; fi
+        printf '%s- %4s%s  %s\n' "$C_R" "$a" "$C_0" "$RET" ;;
+      +)
+        diff_text "${SRC[b]}"
+        if [[ $RET == "${SRC[b]}" ]]; then RET="$C_G$RET$C_0"; fi
+        printf '%s+ %4s%s  %s\n' "$C_G" "$b" "$C_0" "$RET" ;;
     esac
   done
   printf '%s%d line(s) removed, %d line(s) added.%s\n' "$C_B" "$DIFF_REMOVED" "$DIFF_ADDED" "$C_0"

@@ -138,3 +138,21 @@ fixrun 'n\nn\nn\n\nn\n\ny\ny\n' --case-sensitive "$F"
 has "$OUT" "already in order" "a second run finds nothing to reorganise"
 run fix --help
 has "$OUT" "Usage: ls_colours_config.sh fix" "fix --help"
+
+group "fix: the diff shows the entries in their colours"
+saved_colour=$OPT_COLOUR
+ORIG=("" "# archives" ".tar 31" ".zip 32 # zip" "TERM xterm" "DIR 01;34")
+SRC=("" "# archives" ".tar 01;33" ".zip 32 # zip" "TERM xterm*" "DIR 01;34")
+N=5
+OPT_COLOUR=always; setup_colour
+out=$(print_diff)
+has "$out" "${C_R}-    2${C_0}  ${ESC}[0;31m.tar${ESC}[0m" "a removed entry: red sign and number, the name in its old colour"
+has "$out" "${C_G}+    2${C_0}  ${ESC}[0;01;33m.tar${ESC}[0m" "an added entry: green sign and number, the name in its new colour"
+hasnt "$out" ".tar 31" "...and the codes are left out"
+has "$out" "     3  ${ESC}[0;32m.zip${ESC}[0m ${C_D}# zip${C_0}" "context lines show their colours too, comments dimmed"
+has "$out" "${C_R}-    4${C_0}  ${C_R}TERM xterm${C_0}" "lines that are no entries stay as they are, in red or green"
+OPT_COLOUR=never; setup_colour
+out=$(print_diff)
+has "$out" "-    2  .tar 31" "without colours the diff shows the codes as before"
+has "$out" "+    2  .tar 01;33" "...on both sides"
+OPT_COLOUR=$saved_colour; setup_colour
