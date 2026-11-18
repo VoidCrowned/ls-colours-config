@@ -171,12 +171,12 @@ ROWS=12
 if ( LC_ALL=C.UTF-8; x="─"; (( ${#x} == 1 )) ) 2>/dev/null; then
   CUR_ID="e:0"; build_rows
   out=$(LC_ALL=C.UTF-8; OPT_ASCII=0; setup_glyphs; frame_text; printf '%s' "$RET")
-  has "$out" "▌    example.tar" "UTF-8: the cursor is a bar"
+  has "$out" "▶    example.tar" "UTF-8: the cursor is an arrow"
   has "$out" "────────────" "UTF-8: rules are lines"
   is "$(LC_ALL=C.UTF-8; widest "$out"; printf '%s' "$RET")" 60 "UTF-8: widths are counted in characters, not bytes"
   is "$(LC_ALL=C.UTF-8; OPT_ASCII=0; setup_glyphs; widths_ok)" "" "UTF-8: each row's recorded width matches its text"
   out=$(LC_ALL=C.UTF-8; OPT_ASCII=1; setup_glyphs; frame_text; printf '%s' "$RET")
-  hasnt "$out" "▌" "--ascii wins over the locale"
+  hasnt "$out" "▶" "--ascii wins over the locale"
 else
   skip "UTF-8 frame" "no C.UTF-8 locale"
 fi

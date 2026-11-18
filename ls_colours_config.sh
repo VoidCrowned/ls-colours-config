@@ -2960,7 +2960,7 @@ setup_glyphs() {
   esac
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
-    GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▌" GL_OPEN="▾" GL_SHUT="▸"
+    GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▶" GL_OPEN="▾" GL_SHUT="▸"
     GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••" GL_CHOSEN="✓✓"
     GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
@@ -3135,7 +3135,7 @@ render_footer() {
             l="q|quit"
             [[ $T_VIEW == palette ]] && l="Esc/q|section view"
             hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "$l" "y p|copy, paste" "d|clear" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+                   "s|save" "$l" "y|copy" "p|paste" "d|clear" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -4174,7 +4174,9 @@ revert_count() {
   RET=$n
 }
 
-# save_staged: leave the full screen, show the diff, ask, write, come back.
+# save_staged: leave the full screen, show the diff, ask and write. After a
+# write the editor is done (EDIT_DONE); otherwise it comes back.
+EDIT_DONE=0
 save_staged() {
   local i
   if (( ! ${#ST[@]} )); then T_MSG="Nothing to save."; return; fi
@@ -4182,11 +4184,9 @@ save_staged() {
   tui_suspend
   trap 'exit 130' INT
   if review_and_save; then
-    read_file "$FILE_REAL"
-    ST=()
-    run_checks
-    build_entries
-    T_MSG="Saved. Backup: $BACKUP_PATH"
+    ST=() EDIT_DONE=1
+    trap 'INTR=1' INT
+    return
   else
     # not written: put the document back, the changes stay staged
     SRC=("${ORIG[@]}")
@@ -4231,7 +4231,7 @@ help_lines() {
   hk "y" "copy the colour of the entry under the cursor"
   hk "p" "paste the copied colour on the entry (on a heading: on every entry of it, asks first); the copy stays for more pastes"
   hk "d" "clear the entry: plain (00), or for a file type the colour ls gives it by itself (on a heading: every entry of it, asks first)"
-  hk "s" "review the changes and save them"
+  hk "s" "review the changes and save them; the editor closes after writing"
   hk "q, Ctrl-C" "quit (asks when there are unsaved changes)"
   hk "?" "this help"
   HELP+=("" "Keys in the colour picker")
@@ -4448,7 +4448,7 @@ cmd_edit() {
       y) copy_entry ;;
       p) apply_here paste ;;
       d) apply_here clear ;;
-      s) save_staged ;;
+      s) save_staged; (( EDIT_DONE )) && break ;;
       \?) show_help ;;
       q|quit|eof)
         # q leaves the palette view first

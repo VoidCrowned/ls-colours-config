@@ -117,6 +117,8 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   is "$(sed -n 2,3p "$F")" ".tar 33${NL}.TAR 33" "a case pair is edited together and saved"
   is "$(sed -e 2,3d "$F")" "$(printf '%s\n' "$before" | sed -e 2,3d)" "the other lines are untouched"
   count "$F".bak-*; is "$RET" 1 "a backup is written"
+  hasnt "$OUT" "Press Enter to return" "after writing, the editor closes instead of asking to go back"
+  is "$RC" 0 "...and ends without an error"
   has "$OUT" "${ESC}[?1049l" "the alternate screen is left on exit"
   has "$OUT" "${ESC}[?25h" "the cursor is shown again on exit"
 
