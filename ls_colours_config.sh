@@ -2961,7 +2961,7 @@ setup_glyphs() {
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▶" GL_OPEN="▾" GL_SHUT="▸"
-    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••" GL_CHOSEN="✓✓"
+    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="○○" GL_CHOSEN="●●"
     GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
