@@ -250,8 +250,13 @@ is "$FG_B|$PK_SFG|$PK_FG" "1|3|3" "the colour in the file has a mark of its own 
 picker_move 0 1
 render_picker 44 30
 out=$(printf '%s\n' "${RP_TXT[@]}")
-has "$out" "df $GL_SW $GL_SW $GL_SAVED $PK_MARK $GL_SW" "the saved colour and the cursor are marked differently"
-has "$out" "  Foreground   yellow" "the field names the colour under the cursor"
+has "$out" "df $GL_SW $GL_SW $GL_CHOSEN $PK_MARK $GL_SW" "the chosen colour and the cursor are marked differently"
+has "$out" "  Foreground   yellow   chosen: green" "the field names the colour under the cursor, and the chosen one"
+picker_choose; picker_move 0 1
+render_picker 44 30
+out=$(printf '%s\n' "${RP_TXT[@]}")
+has "$out" "df $GL_SW $GL_SW $GL_SAVED $GL_CHOSEN $PK_MARK" "...and the colour in the file keeps a mark of its own"
+picker_move 0 -1
 picker_move 1 0
 is "${FG_CELLS[PK_FG]}" 93 "down from a normal colour is its bright twin"
 picker_move -1 0; picker_move -1 0
@@ -287,6 +292,29 @@ is "$(grid_rows_n 1; printf %s "$RET")" 9 "full width: 2 rows of 16 colours, 6 o
 PK_CW=18
 is "$(grid_rows_n 1; printf %s "$RET")" 16 "in the pane: 2, 12 and 2"
 OPT_256=0 PK_CW=36
+
+group "edit: moving through the attributes"
+OPT_256=0
+picker_open_state 1
+# at 30 columns the switches wrap: bold dim / underline reverse / blink
+render_picker 30 40
+is "${PK_AT_ROW[*]}" "0 0 1 1 2" "the picker knows on which row each switch is"
+PK_FIELD=1; PK_BG=$(( BG_B + 8 )); picker_move 1 0
+is "$PK_FIELD|$PK_AT" "2|0" "down from the bright row of the background goes to the attributes"
+PK_AT=1; picker_move 1 0
+is "$PK_AT" 3 "down from dim is reverse, the switch nearest on screen"
+picker_move 1 0
+is "$PK_AT" 4 "...then blink on the last row"
+picker_move 1 0
+is "$PK_FIELD|$PK_AT" "2|4" "down from the last row stays"
+picker_move -1 0; picker_move -1 0
+is "$PK_AT" 0 "up goes back row by row (blink, underline, bold)"
+picker_move -1 0
+is "$PK_FIELD" 1 "up from the first row goes to the background"
+PK_FIELD=2 PK_AT=0; picker_move 0 1
+is "$PK_AT" 1 "left and right go from switch to switch"
+PK_ATTRS=" "; picker_choose
+is "$PK_ATTRS|$PK_TOUCHED" " 2 |1" "Space switches an attribute on"
 
 group "edit: every key is described"
 # Every key the list, the picker and the help screen react to must appear in

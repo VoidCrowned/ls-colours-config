@@ -2494,7 +2494,7 @@ COLOUR_NAMES=(black red green yellow blue magenta cyan white)
 # Picker state.
 declare -a FG_CELLS=() BG_CELLS=()
 declare -A PV=()                     # entry -> the value the open picker shows
-FG_B=1 BG_B=1 PK_START="" PK_FIELD=0 PK_FG=0 PK_BG=0 PK_AT=0
+FG_B=1 BG_B=1 PK_START="" PK_FIELD=0 PK_FG=0 PK_BG=0 PK_CHFG=0 PK_CHBG=0 PK_AT=0
 PK_ATTRS=" " PK_EXTRA="" PK_PAD=1 PK_ZERO=0 PK_RAW="" PK_TOUCHED=0
 PK_REF=0 PK_OLD=""                   # the entry in the picker, and its value before
 
@@ -2920,11 +2920,11 @@ setup_glyphs() {
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▌" GL_OPEN="▾" GL_SHUT="▸"
-    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••"
+    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••" GL_CHOSEN="✓✓"
     GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
-    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".."
+    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".." GL_CHOSEN="**"
     GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_LEFT="left" GL_K_RIGHT="right" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
@@ -3366,6 +3366,7 @@ swatch() {
       case $2 in
         1) RET="${ESC}[7mdf${ESC}[0m" ;;
         2) RET="${C_B}${C_U}df${C_0}" ;;
+        3) RET="${C_B}${C_C}df${C_0}" ;;
         *) RET="${C_D}df${C_0}" ;;
       esac
       return ;;
@@ -3387,6 +3388,7 @@ swatch() {
   case $2 in
     1) text=$PK_MARK ;;
     2) text=$GL_SAVED ;;
+    3) text=$GL_CHOSEN ;;
   esac
   if (( ! USE_COLOUR )); then
     RET=$text
@@ -3417,6 +3419,7 @@ picker_cells() {
   for i in "${!BG_CELLS[@]}"; do [[ ${BG_CELLS[i]} == "$bg" ]] && PK_BG=$i; done
   if (( PK_FG < 0 )); then FG_CELLS=("$fg" "${FG_CELLS[@]}"); FG_B=2 PK_FG=0; fi
   if (( PK_BG < 0 )); then BG_CELLS=("$bg" "${BG_CELLS[@]}"); BG_B=2 PK_BG=0; fi
+  PK_CHFG=$PK_FG PK_CHBG=$PK_BG
 }
 
 # The palette of a field is drawn in rows: row 0 holds the cells in front
@@ -3458,23 +3461,72 @@ grid_row() {
   fi
 }
 
-# picker_value -> RET: the value the picker stands for at the moment.
+# PK_FG and PK_BG are the cursor in each palette, PK_CHFG and PK_CHBG the
+# colours chosen with Space. Only the chosen ones are accepted with Enter;
+# the cursor of the focused field is shown as a preview.
+
+# picker_value -> RET: the value chosen in the picker at the moment.
 picker_value() {
   if [[ -n $PK_RAW ]]; then RET=$PK_RAW; return; fi
-  sgr_compose "${FG_CELLS[PK_FG]}" "${BG_CELLS[PK_BG]}" "$PK_ATTRS" "$PK_EXTRA" "$PK_PAD" "$PK_ZERO"
+  sgr_compose "${FG_CELLS[PK_CHFG]}" "${BG_CELLS[PK_CHBG]}" "$PK_ATTRS" "$PK_EXTRA" "$PK_PAD" "$PK_ZERO"
 }
 
-# picker_move DY DX: move inside the grid of the focused field; leaving it at
-# the top or bottom goes to the neighbouring field. Up and down keep the
-# column on screen.
+# picker_preview -> RET: the chosen value, with the colour under the cursor
+# of the focused field in place of the chosen one.
+picker_preview() {
+  local fg=$PK_CHFG bg=$PK_CHBG
+  (( PK_FIELD == 0 )) && fg=$PK_FG
+  (( PK_FIELD == 1 )) && bg=$PK_BG
+  if (( fg == PK_CHFG && bg == PK_CHBG )); then picker_value; return; fi
+  sgr_compose "${FG_CELLS[fg]}" "${BG_CELLS[bg]}" "$PK_ATTRS" "$PK_EXTRA" "$PK_PAD" "$PK_ZERO"
+}
+
+# picker_choose: Space. In a palette the colour under the cursor becomes the
+# chosen one (nothing happens when it already is); in the attributes the
+# switch under the cursor goes on or off.
+picker_choose() {
+  local codes=(1 2 4 7 5) a
+  case $PK_FIELD in
+    0) (( PK_FG == PK_CHFG )) && return; PK_CHFG=$PK_FG ;;
+    1) (( PK_BG == PK_CHBG )) && return; PK_CHBG=$PK_BG ;;
+    *)
+      a=${codes[PK_AT]}
+      if [[ $PK_ATTRS == *" $a "* ]]; then PK_ATTRS=${PK_ATTRS/" $a "/ }; else PK_ATTRS+="$a "; fi ;;
+  esac
+  PK_RAW="" PK_TOUCHED=1
+}
+
+# picker_focus FIELD: give FIELD the focus. The cursor of the field that is
+# left goes back to its chosen colour, so no hidden position stays behind.
+picker_focus() {
+  PK_FG=$PK_CHFG PK_BG=$PK_CHBG PK_FIELD=$1
+}
+
+# picker_move DY DX: move the cursor inside the grid of the focused field;
+# leaving it at the top or bottom goes to the neighbouring field. Up and down
+# keep the column on screen. Moving never changes what is chosen.
+declare -a PK_AT_ROW=(0 0 0 0 0) PK_AT_X=(0 10 18 31 43)
 picker_move() {
-  local dy=$1 dx=$2 idx b ncells row col vis
-  PK_RAW=""
+  local dy=$1 dx=$2 idx b ncells row col vis i best d bd
   if (( PK_FIELD == 2 )); then
-    PK_AT=$(( PK_AT + dx ))
-    (( PK_AT < 0 )) && PK_AT=0
-    (( PK_AT > 4 )) && PK_AT=4
-    (( dy < 0 )) && PK_FIELD=1
+    if (( dx )); then
+      PK_AT=$(( PK_AT + dx ))
+      (( PK_AT < 0 )) && PK_AT=0
+      (( PK_AT > 4 )) && PK_AT=4
+      return
+    fi
+    # the switches wrap on a narrow pane: up and down go row by row, to
+    # the switch nearest on screen
+    row=$(( PK_AT_ROW[PK_AT] + dy ))
+    if (( row < 0 )); then picker_focus 1; return; fi
+    best=-1 bd=9999
+    for i in 0 1 2 3 4; do
+      (( PK_AT_ROW[i] == row )) || continue
+      d=$(( PK_AT_X[i] - PK_AT_X[PK_AT] ))
+      (( d < 0 )) && d=$(( -d ))
+      if (( d < bd )); then bd=$d best=$i; fi
+    done
+    (( best >= 0 )) && PK_AT=$best
     return
   fi
   if (( PK_FIELD == 0 )); then
@@ -3493,10 +3545,10 @@ picker_move() {
     vis=$(( RET3 + col ))
     grid_rows_n "$b"
     if (( row < 0 )); then
-      (( PK_FIELD > 0 )) && PK_FIELD=$(( PK_FIELD - 1 ))
+      (( PK_FIELD > 0 )) && picker_focus $(( PK_FIELD - 1 ))
       return
     elif (( row >= RET )); then
-      PK_FIELD=$(( PK_FIELD + 1 ))
+      picker_focus $(( PK_FIELD + 1 ))
       return
     fi
     grid_start "$row" "$b"
@@ -3505,7 +3557,6 @@ picker_move() {
     (( col >= RET2 )) && col=$(( RET2 - 1 ))
     idx=$(( RET + col ))
   fi
-  PK_TOUCHED=1
   if (( PK_FIELD == 0 )); then PK_FG=$idx; else PK_BG=$idx; fi
 }
 
@@ -3539,16 +3590,23 @@ wrap_words() {
 
 # field_rows FIELD W: the label and the palette rows of a field.
 field_rows() {
-  local field=$1 w=$2 idx b saved rows r i line first last name len
+  local field=$1 w=$2 idx b saved chosen rows r i line first last name len
   local -a cells=()
   if (( field == 0 )); then
-    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B saved=$PK_SFG name="Foreground"
+    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B saved=$PK_SFG name="Foreground" chosen=$PK_CHFG
   else
-    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B saved=$PK_SBG name="Background"
+    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B saved=$PK_SBG name="Background" chosen=$PK_CHBG
   fi
+  # only the focused field shows its cursor
+  (( PK_FIELD == field )) || idx=$chosen
   describe_colour "${cells[idx]}"
   if (( PK_FIELD == field )); then
-    rp_add "  ${C_B}${C_C}$name${C_0}   ${C_B}$RET${C_0}"
+    line="  ${C_B}${C_C}$name${C_0}   ${C_B}$RET${C_0}"
+    if (( idx != chosen )); then
+      describe_colour "${cells[chosen]}"
+      line+="   ${C_D}chosen: $RET${C_0}"
+    fi
+    rp_add "$line"
   else
     rp_add "  ${C_D}$name${C_0}   $RET"
   fi
@@ -3565,6 +3623,7 @@ field_rows() {
     for (( i = first; i < last && i < ${#cells[@]}; i++ )); do
       if (( r < 2 )); then len=$(( len + 3 )); else len=$(( len + 2 )); fi
       if (( i == idx )); then swatch "${cells[i]}" 1
+      elif (( i == chosen )); then swatch "${cells[i]}" 3
       elif (( i == saved )); then swatch "${cells[i]}" 2
       else swatch "${cells[i]}" 0
       fi
@@ -3583,11 +3642,11 @@ field_rows() {
 declare -a RP_TXT=() RP_OPT=() RP_W=() RP_LEN=()
 PK_CW=36 PK_SFG=-1 PK_SBG=-1 PK_FILE="" RP_FOCUS=0
 render_picker() {
-  local w=$1 h=$2 ref=$PK_REF value title sec pad i line len nw name names=(bold dim underline reverse blink) codes=(1 2 4 7 5)
+  local w=$1 h=$2 ref=$PK_REF value title sec pad i r line len nw name names=(bold dim underline reverse blink) codes=(1 2 4 7 5)
   local -a keep=() keepw=()
   RP_TXT=() RP_OPT=() RP_W=() RP_LEN=() RP_FOCUS=0
   if (( w >= 76 )); then PK_CW=36; else PK_CW=18; fi
-  picker_value
+  picker_preview
   value=$RET
   # what is being edited, and where it lives
   title=${E_LABEL[ref]} sec=${E_SEC[ref]}
@@ -3626,11 +3685,13 @@ render_picker() {
   else
     rp_add "  ${C_D}Attributes${C_0}"
   fi
-  line="  " len=2
+  line="  " len=2 r=0
   for i in 0 1 2 3 4; do
     title="[ ] ${names[i]}"
     [[ $PK_ATTRS == *" ${codes[i]} "* ]] && title="[x] ${names[i]}"
-    if (( len + ${#title} + 1 > w && len > 2 )); then rp_add "$line"; line="  " len=2; fi
+    if (( len + ${#title} + 1 > w && len > 2 )); then rp_add "$line"; line="  " len=2 r=$(( r + 1 )); fi
+    # where the switch is, for moving up and down between the rows
+    PK_AT_ROW[i]=$r PK_AT_X[i]=$len
     if (( PK_FIELD == 2 && PK_AT == i )); then
       line+=" ${C_B}${C_C}$title${C_0} "
     else
@@ -3733,8 +3794,8 @@ file_value() {
 preview_set() {
   local i
   PV=()
-  if (( PK_TOUCHED )); then
-    picker_value
+  picker_preview
+  if (( PK_TOUCHED )) || [[ $RET != "$PK_START" ]]; then
     for i in $PK_ENTRIES; do PV[$i]=$RET; done
   fi
   if (( PK_GRP >= 0 )); then summarise "$PK_GRP"; else summarise "${E_GRP[PK_REF]}"; fi
@@ -3782,7 +3843,7 @@ ask_yes() {
 # group (ENTRY is then the first of them). Stages the result on Enter.
 PK_GRP=-1 PK_ENTRIES="" PK_GDIFF=0 PK_GNAME=""
 open_picker() {
-  local ref=$1 old v codes=(1 2 4 7 5) a dirty=1 e c
+  local ref=$1 old v a dirty=1 e c
   local -A tally=()
   PK_GRP=${2:--1}
   if (( PK_GRP >= 0 )); then
@@ -3837,14 +3898,9 @@ open_picker() {
       down|j)  picker_move 1 0 ;;
       left|h)  picker_move 0 -1 ;;
       right|l) picker_move 0 1 ;;
-      tab)     PK_FIELD=$(( (PK_FIELD + 1) % 3 )) ;;
-      backtab) PK_FIELD=$(( (PK_FIELD + 2) % 3 )) ;;
-      space)
-        if (( PK_FIELD == 2 )); then
-          a=${codes[PK_AT]}
-          PK_RAW="" PK_TOUCHED=1
-          if [[ $PK_ATTRS == *" $a "* ]]; then PK_ATTRS=${PK_ATTRS/" $a "/ }; else PK_ATTRS+="$a "; fi
-        fi ;;
+      tab)     picker_focus $(( (PK_FIELD + 1) % 3 )) ;;
+      backtab) picker_focus $(( (PK_FIELD + 2) % 3 )) ;;
+      space)   picker_choose ;;
       r)
         # back to the colour in the file
         picker_load "$PK_FILE"
