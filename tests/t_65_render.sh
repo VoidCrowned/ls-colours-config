@@ -455,6 +455,9 @@ clear_value "${t_e[LINK]}"; is "$RET" "01;36" "...and so is LINK"
 CUR_ID="e:${t_e[DIR]}"; place_cursor
 apply_here clear
 is "${#ST[@]}|$T_MSG" "0|DIR is already clear." "d on a type that already has the ls colour changes nothing"
+CUR_ID="e:${t_e[ORPHAN]}"; place_cursor
+apply_here clear
+has "$T_MSG" "ls then shows it in the colour of LINK" "clearing ORPHAN says how ls shows it then"
 eval "$real_ask"; eval "$real_draw"
 ST=()
 

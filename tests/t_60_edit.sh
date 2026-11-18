@@ -170,6 +170,16 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   tui "$F" -- 'y' 'j' 'p' 'j' 'd' 's' 'y\n' '\n' 'q'
   is "$(sed -n 2,6p "$F")" ".tar 31${NL}.TAR 31${NL}.gz 31${NL}.GZ 31${NL}.zip 00" "y, p and d in the list are saved"
 
+  # on the heading, one colour to the right without Space, Enter: the
+  # chosen colour (red, most of the section) is given, not the cursor's
+  fresh pairs.dircolors
+  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n' '\n' 'q'
+  is "$(sed -n 5p "$F")" ".GZ 31" "Enter accepts the chosen colour, not the one under the cursor"
+  has "$OUT" "Give all 3 entries of archives the colour red? 1 of them change." "...and the question names the chosen colour"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' '\r' 'q'
+  has "$OUT" "Nothing chosen: Space chooses" "Enter without Space on an entry says how to choose"
+
   # palette view: up to the heading of red, one colour to the right (green),
   # accept, save
   fresh pairs.dircolors

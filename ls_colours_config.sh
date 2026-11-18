@@ -3965,6 +3965,10 @@ open_picker() {
       esc|q|eof) PV=(); T_FOCUS=list T_CTX=list; build_rows; return 1 ;;
     esac
   done
+  # Enter accepts what was chosen, not what is under the cursor
+  e=0
+  (( PK_FIELD < 2 && (PK_FG != PK_CHFG || PK_BG != PK_CHBG) )) && e=1
+  picker_focus "$PK_FIELD"
   T_FOCUS=list T_CTX=list
   # a group that was not of one colour: say how many entries change, and
   # ask, with the new colours still showing in the list
@@ -3991,7 +3995,11 @@ open_picker() {
     fi
   fi
   PV=()
-  if (( ! PK_TOUCHED )); then build_rows; return 1; fi
+  if (( ! PK_TOUCHED )); then
+    build_rows
+    (( e )) && T_MSG="Nothing chosen: Space chooses the colour under the cursor, Enter then accepts it."
+    return 1
+  fi
   stage_value "$PK_ENTRIES" "$v"
   # in the palette the group of the new colour takes the cursor
   if (( PK_GRP >= 0 )) && [[ $T_VIEW == palette ]]; then same_colour "$v"; CUR_ID="h:$RET"; fi
@@ -4128,9 +4136,12 @@ apply_here() {
     PV=()
     if ! ask_yes "$q"; then build_rows; T_MSG="Nothing changed."; return; fi
   fi
+  # entries that would look the same keep their spelling
   for e in $list; do
     entry_target "$kind" "$e"
-    stage_value " $e" "$RET"
+    v=$RET
+    count_changes " $e" "$v"
+    (( RET )) && stage_value " $e" "$v"
   done
   # in the palette a pasted group follows its new colour
   if (( grp >= 0 )) && [[ $T_VIEW == palette && $kind == paste ]]; then same_colour "$CLIP"; CUR_ID="h:$RET"; fi
@@ -4144,8 +4155,11 @@ apply_here() {
     T_MSG="$what: $n entries cleared"
   else
     clear_value "${list# }"
-    describe_value "$RET"
-    T_MSG="$what cleared to $RET"
+    v=$RET
+    describe_value "$v"
+    T_MSG="$what cleared to $RET ($v)"
+    # ls draws broken links in the colour of links when they have none
+    case $what in ORPHAN|MISSING) T_MSG+="; ls then shows it in the colour of LINK" ;; esac
   fi
 }
 
