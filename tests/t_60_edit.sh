@@ -117,8 +117,17 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   is "$(sed -n 2,3p "$F")" ".tar 33${NL}.TAR 33" "a case pair is edited together and saved"
   is "$(sed -e 2,3d "$F")" "$(printf '%s\n' "$before" | sed -e 2,3d)" "the other lines are untouched"
   count "$F".bak-*; is "$RET" 1 "a backup is written"
-  hasnt "$OUT" "Press Enter to return" "after writing, the editor closes instead of asking to go back"
-  is "$RC" 0 "...and ends without an error"
+  has "$OUT" "Press Enter to return to the editor, q or Escape to quit now." "after writing, Enter goes back and q or Esc quits"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'y\n' 'q'
+  is "$RC|$(sed -n 2p "$F")" "0|.tar 32" "q after writing quits at once"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'y\n' '\033'
+  is "$RC|$(sed -n 2p "$F")" "0|.tar 32" "...and so does Escape"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'n\n' 'q'
+  has "$OUT" "q or Escape to quit without saving." "when nothing was written, the prompt says q loses the changes"
+  is "$RC|$(sed -n 2p "$F")" "0|.tar 31" "...and q then quits without writing"
   has "$OUT" "${ESC}[?1049l" "the alternate screen is left on exit"
   has "$OUT" "${ESC}[?25h" "the cursor is shown again on exit"
 

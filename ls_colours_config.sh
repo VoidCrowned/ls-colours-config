@@ -4174,28 +4174,37 @@ revert_count() {
   RET=$n
 }
 
-# save_staged: leave the full screen, show the diff, ask and write. After a
-# write the editor is done (EDIT_DONE); otherwise it comes back.
+# save_staged: leave the full screen, show the diff, ask and write. Then
+# Enter goes back to the editor, q or Esc quits it (EDIT_DONE).
 EDIT_DONE=0
 save_staged() {
-  local i
+  local i what="quit now"
   if (( ! ${#ST[@]} )); then T_MSG="Nothing to save."; return; fi
   for i in "${!ST[@]}"; do set_value "$i" "${ST[i]}"; done
   tui_suspend
   trap 'exit 130' INT
   if review_and_save; then
-    ST=() EDIT_DONE=1
-    trap 'INTR=1' INT
-    return
+    read_file "$FILE_REAL"
+    ST=()
+    run_checks
+    build_entries
+    T_MSG="Saved. Backup: $BACKUP_PATH"
   else
     # not written: put the document back, the changes stay staged
     SRC=("${ORIG[@]}")
     N=$(( ${#SRC[@]} - 1 ))
     parse
     T_MSG="Not saved; your changes are still staged."
+    what="quit without saving"
   fi
-  printf '\nPress Enter to return to the editor. '
-  IFS= read -r i
+  printf '\nPress Enter to return to the editor, q or Escape to %s. ' "$what"
+  while :; do
+    while ! read_key 1; do :; done
+    case $KEY in
+      enter) break ;;
+      q|Q|esc|eof) printf '\n'; EDIT_DONE=1; trap 'INTR=1' INT; return ;;
+    esac
+  done
   trap 'INTR=1' INT
   tui_start
   term_size
@@ -4231,7 +4240,7 @@ help_lines() {
   hk "y" "copy the colour of the entry under the cursor"
   hk "p" "paste the copied colour on the entry (on a heading: on every entry of it, asks first); the copy stays for more pastes"
   hk "d" "clear the entry: plain (00), or for a file type the colour ls gives it by itself (on a heading: every entry of it, asks first)"
-  hk "s" "review the changes and save them; the editor closes after writing"
+  hk "s" "review the changes and save them; afterwards Enter goes back to the editor, q or Esc quits"
   hk "q, Ctrl-C" "quit (asks when there are unsaved changes)"
   hk "?" "this help"
   HELP+=("" "Keys in the colour picker")

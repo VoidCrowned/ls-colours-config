@@ -299,7 +299,7 @@ picker_open_state 1
 # at 30 columns the switches wrap: bold dim / underline reverse / blink
 render_picker 30 40
 is "${PK_AT_ROW[*]}" "0 0 1 1 2" "the picker knows on which row each switch is"
-PK_FIELD=1; PK_BG=$(( BG_B + 8 )); picker_move 1 0
+PK_FIELD=1; picker_move 1 0; picker_move 1 0
 is "$PK_FIELD|$PK_AT" "2|0" "down from the bright row of the background goes to the attributes"
 PK_AT=1; picker_move 1 0
 is "$PK_AT" 3 "down from dim is reverse, the switch nearest on screen"
