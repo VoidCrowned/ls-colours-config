@@ -103,6 +103,14 @@ declare -A TYPE_SAMPLE=(
   [ex]=executable [su]=setuid [sg]=setgid [st]=sticky [ow]=other_writable
   [tw]=sticky_other_writable [ca]=capability [mh]=multihardlink
 )
+# The colours GNU ls gives a file type by itself, when the configuration
+# does not set it. Types missing here are not coloured (ORPHAN and MISSING
+# then look like a link, CAPABILITY and MULTIHARDLINK like a file).
+declare -A LS_DEFAULT=(
+  [rs]=0 [di]="01;34" [ln]="01;36" [pi]=33 [so]="01;35" ["do"]="01;35"
+  [bd]="01;33" [cd]="01;33" [ex]="01;32" [su]="37;41" [sg]="30;43"
+  [st]="37;44" [ow]="34;42" [tw]="30;42"
+)
 # Every code, in the order ls documents them. A string rather than a literal
 # list in the loops, because "fi" and "do" are shell keywords.
 TYPE_CODES="no fi rs di ln or mi pi so bd cd do ex su sg st ow tw ca mh lc rc ec cl"
@@ -3086,7 +3094,7 @@ render_footer() {
   local w=$1 pos=$3 out=" " len=1 h k l add room
   local -a hints=()
   case $2 in
-    picker) hints=("$GL_K_ARROWS|choose" "Tab|next field" "$GL_K_SPACE|toggle" "$GL_K_ENTER|accept"
+    picker) hints=("$GL_K_ARROWS|move" "Tab|next field" "$GL_K_SPACE|choose" "$GL_K_ENTER|accept"
                    "Esc/q|cancel" "?|help" "e|type a code" "r|reset") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
@@ -3094,7 +3102,7 @@ render_footer() {
             l="q|quit"
             [[ $T_VIEW == palette ]] && l="Esc/q|section view"
             hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "$l" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+                   "s|save" "$l" "y p|copy, paste" "d|clear" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -4014,6 +4022,100 @@ undo_all() {
   fi
 }
 
+# --- copy, paste and clear ----------------------------------------------------
+
+CLIP="" CLIP_FROM=""
+
+# copy_entry: y. The colour of the entry under the cursor, staged changes
+# included, is kept for p until something else is copied.
+copy_entry() {
+  local e
+  if ! cur_entry; then T_MSG="Put the cursor on an entry to copy its colour."; return; fi
+  e=$RET
+  entry_values "$e"
+  CLIP=$EV_EFF CLIP_FROM=${E_LABEL[e]}
+  describe_value "$CLIP"
+  T_MSG="Copied $RET ($CLIP) from $CLIP_FROM; p pastes it"
+}
+
+# clear_value ENTRY -> RET: the value an entry gets when it is cleared:
+# plain, or for a file type the colour ls gives it by itself.
+clear_value() {
+  local first=${E_LINES[$1]# }
+  first=${first%% *}
+  RET="00"
+  [[ ${L_KIND[first]} == type ]] && RET=${LS_DEFAULT[${L_NORM[first]}]:-00}
+}
+
+# entry_target KIND ENTRY -> RET: the new value for p (paste) or d (clear).
+entry_target() {
+  if [[ $1 == paste ]]; then RET=$CLIP; else clear_value "$2"; fi
+}
+
+# apply_here KIND: p and d. On an entry it is changed at once; on a heading
+# every entry of the group, after a question with the result in the list.
+apply_here() {
+  local kind=$1 list what e v n=0 grp=-1 q
+  if [[ $kind == paste && -z $CLIP ]]; then
+    T_MSG="Nothing copied yet: y copies the colour of the entry under the cursor."
+    return
+  fi
+  if cur_entry; then
+    list=" $RET" what=${E_LABEL[RET]}
+  elif [[ ${ROW_KIND[T_CUR]:-} == h ]]; then
+    grp=${ROW_REF[T_CUR]}
+    list=${G_ENTRIES[grp]}
+    group_name "$grp"
+    what=$RET
+    [[ $T_VIEW == palette ]] && what="the $RET entries"
+  else
+    return
+  fi
+  for e in $list; do
+    entry_target "$kind" "$e"
+    count_changes " $e" "$RET"
+    n=$(( n + RET ))
+  done
+  if (( ! n )); then
+    if [[ $kind == paste ]]; then T_MSG="$what already looks like that."; else T_MSG="$what is already clear."; fi
+    return
+  fi
+  if (( grp >= 0 )); then
+    PV=()
+    for e in $list; do entry_target "$kind" "$e"; PV[$e]=$RET; done
+    summarise "$grp"
+    draw_screen
+    if [[ -n $T_FILTER ]]; then q="the ${G_N[grp]} matching entries"; else q="all ${G_N[grp]} entries"; fi
+    if [[ $kind == paste ]]; then
+      describe_value "$CLIP"
+      q="Give $q of $what the colour $RET? $n of them change."
+    else
+      q="Clear $q of $what? $n of them change."
+    fi
+    PV=()
+    if ! ask_yes "$q"; then build_rows; T_MSG="Nothing changed."; return; fi
+  fi
+  for e in $list; do
+    entry_target "$kind" "$e"
+    stage_value " $e" "$RET"
+  done
+  # in the palette a pasted group follows its new colour
+  if (( grp >= 0 )) && [[ $T_VIEW == palette && $kind == paste ]]; then same_colour "$CLIP"; CUR_ID="h:$RET"; fi
+  build_rows
+  if [[ $kind == paste ]]; then
+    describe_value "$CLIP"
+    v="$RET ($CLIP)"
+    if (( grp >= 0 )); then T_MSG="$what: $n entries changed to $v"; else T_MSG="$what set to $v"; fi
+    T_MSG+="; the copy stays for more pastes"
+  elif (( grp >= 0 )); then
+    T_MSG="$what: $n entries cleared"
+  else
+    clear_value "${list# }"
+    describe_value "$RET"
+    T_MSG="$what cleared to $RET"
+  fi
+}
+
 # revert_count -> RET: how many entries have staged changes.
 revert_count() {
   local e i n=0
@@ -4079,16 +4181,19 @@ help_lines() {
   hk "c" "join or separate case pairs such as .deb / .DEB"
   hk "u" "undo the changes of the entry under the cursor (on a heading: of all its entries)"
   hk "U" "undo all changes (asks first)"
+  hk "y" "copy the colour of the entry under the cursor"
+  hk "p" "paste the copied colour on the entry (on a heading: on every entry of it, asks first); the copy stays for more pastes"
+  hk "d" "clear the entry: plain (00), or for a file type the colour ls gives it by itself (on a heading: every entry of it, asks first)"
   hk "s" "review the changes and save them"
   hk "q, Ctrl-C" "quit (asks when there are unsaved changes)"
   hk "?" "this help"
   HELP+=("" "Keys in the colour picker")
-  hk "$a, h j k l" "choose a colour or an attribute"
+  hk "$a, h j k l" "move the cursor over the colours and attributes"
   hk "Tab / Shift-Tab" "next / previous field (foreground, background, attributes)"
-  hk "$sp" "switch an attribute on or off"
+  hk "$sp" "choose the colour under the cursor, or switch an attribute on or off"
   hk "e" "type an SGR code by hand"
   hk "r" "back to the colour in the file"
-  hk "$n" "accept"
+  hk "$n" "accept the chosen colours"
   hk "Esc, q" "cancel"
   hk "?" "this help"
   HELP+=(""
@@ -4187,7 +4292,9 @@ Keys: arrows or h/j/k/l to move, Enter to edit (on a heading: the whole
 section), Space to fold a section, z / Z to fold or unfold all, / to search,
 v for the palette view (entries grouped by colour), x to switch between
 colours in words and codes, c for case pairs, u to undo the entry under the
-cursor, U to undo everything, s to save, q to quit, ? for the full list.
+cursor, U to undo everything, y and p to copy and paste a colour, d to clear
+an entry, s to save, q to quit, ? for the full list. In the picker the
+arrows move the cursor and Space chooses the colour under it.
 
 edit only changes entries that exist. Adding entries and reorganising the
 file is the job of fix.
@@ -4291,6 +4398,9 @@ cmd_edit() {
       x) T_RAW=$(( ! T_RAW )) ;;
       u) undo_here ;;
       U) undo_all ;;
+      y) copy_entry ;;
+      p) apply_here paste ;;
+      d) apply_here clear ;;
       s) save_staged ;;
       \?) show_help ;;
       q|quit|eof)

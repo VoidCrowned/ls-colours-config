@@ -163,7 +163,7 @@ PK_REF=0 PK_OLD=31 PK_START=31 PK_FILE=31 T_FOCUS=picker T_CTX=picker
 picker_load 31
 frame_text
 has "$RET" "Foreground   red" "below $SPLIT_COLS columns the picker takes the place of the list"
-has "$RET" "arrows choose" "...with its own hints (in ASCII: 'arrows', otherwise arrow symbols)"
+has "$RET" "arrows move" "...with its own hints (in ASCII: 'arrows', otherwise arrow symbols)"
 T_FOCUS=list T_CTX=list
 ROWS=12
 
@@ -405,6 +405,58 @@ has "$RET" "archives, matches only" "with a search on, the picker says only the 
 has "$RET" "1 matching" "...and how many they are"
 T_FILTER=""
 PV=() PK_GRP=-1 T_FOCUS=list T_CTX=list; build_rows
+
+group "edit: copy, paste and clear"
+render_state
+# the question is answered from ANSWER, and the screen is not drawn
+real_ask=$(declare -f ask_yes); real_draw=$(declare -f draw_screen)
+ASKED="" ANSWER=y
+ask_yes() { ASKED=$1; [[ $ANSWER == y ]]; }
+draw_screen() { :; }
+CUR_ID="e:3"; place_cursor
+apply_here paste
+is "${#ST[@]}|$T_MSG" "0|Nothing copied yet: y copies the colour of the entry under the cursor." "p without a copy says how to make one"
+copy_entry
+is "$CLIP|$CLIP_FROM" "35|.png / .PNG" "y copies the colour of the entry under the cursor"
+CUR_ID="e:0"; place_cursor
+apply_here paste
+is "${ST[2]}|${ST[3]}|$CLIP" "35|35|35" "p puts it on another entry, both spellings, and the copy stays"
+CUR_ID="e:2"; place_cursor
+apply_here paste
+is "${ST[6]}" 35 "...so it can be pasted again"
+ST[2]=33 ST[3]=33
+CUR_ID="e:0"; place_cursor; copy_entry
+is "$CLIP" 33 "y copies the staged colour, not the one in the file"
+CUR_ID="h:archives"; place_cursor
+ANSWER=n; apply_here paste
+is "${ST[6]}|$T_MSG" "35|Nothing changed." "p on a heading asks first; no changes nothing"
+has "$ASKED" "Give all 3 entries of archives the colour yellow? 2 of them change." "...and the question says how many change"
+ANSWER=y; apply_here paste
+is "${ST[4]}|${ST[5]}|${ST[6]}" "33|33|33" "...yes gives every entry of the section the copy"
+y_msg=$T_MSG
+has "$y_msg" "the copy stays" "...and says the copy is kept"
+ST=(); build_rows
+CUR_ID="e:3"; place_cursor
+apply_here clear
+is "${ST[9]}|${ST[10]}" "00|00" "d clears a pattern to 00"
+has "$T_MSG" "cleared" "...and says so"
+ST=(); build_rows
+CUR_ID="h:images"; place_cursor
+ANSWER=y; apply_here clear
+has "$ASKED" "Clear all 2 entries of images? 2 of them change." "d on a heading asks first"
+is "${ST[9]}|${ST[11]}" "00|00" "...and clears every entry of it"
+ST=()
+# file types get the colour ls gives them by itself
+read_file "$FIX/problems.dircolors"; build_entries; build_rows
+declare -A t_e=(); for i in "${!E_LABEL[@]}"; do t_e[${E_LABEL[i]}]=$i; done
+clear_value "${t_e[ORPHAN]}"; is "$RET" "00" "a type ls does not colour (ORPHAN) is cleared to 00"
+clear_value "${t_e[DIR]}"; is "$RET" "01;34" "DIR is cleared to the colour ls gives it by itself"
+clear_value "${t_e[LINK]}"; is "$RET" "01;36" "...and so is LINK"
+CUR_ID="e:${t_e[DIR]}"; place_cursor
+apply_here clear
+is "${#ST[@]}|$T_MSG" "0|DIR is already clear." "d on a type that already has the ls colour changes nothing"
+eval "$real_ask"; eval "$real_draw"
+ST=()
 
 group "edit: palette view"
 render_state

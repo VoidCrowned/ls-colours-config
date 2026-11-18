@@ -165,6 +165,11 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   is "$(cat "$F")" "$before" "...declining the question changes nothing"
   has "$OUT" "Give all 3 entries of archives the colour green? 3 of them change." "...the question names the colour and how many entries change"
 
+  # y on .tar, down, p on .gz/.GZ, down, d on .zip, save
+  fresh pairs.dircolors
+  tui "$F" -- 'y' 'j' 'p' 'j' 'd' 's' 'y\n' '\n' 'q'
+  is "$(sed -n 2,6p "$F")" ".tar 31${NL}.TAR 31${NL}.gz 31${NL}.GZ 31${NL}.zip 00" "y, p and d in the list are saved"
+
   # palette view: up to the heading of red, one colour to the right (green),
   # accept, save
   fresh pairs.dircolors
