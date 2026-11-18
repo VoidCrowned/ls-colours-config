@@ -55,7 +55,14 @@ group "edit: colour picker"
 picker_load "00;33"
 picker_value; is "$RET" "00;33" "an untouched value comes back unchanged"
 PK_FIELD=0; picker_move 0 1
-picker_value; is "$RET" "00;34" "one step right is the next colour, written in the style of the old value"
+picker_value; is "$RET" "00;33" "moving the cursor chooses nothing"
+picker_preview; is "$RET" "00;34" "...but the preview is the colour under the cursor, written in the style of the old value"
+picker_choose; picker_value; is "$RET|$PK_TOUCHED" "00;34|1" "Space chooses it"
+PK_TOUCHED=0; picker_choose; is "$PK_TOUCHED" 0 "Space on the chosen colour does nothing"
+picker_move 0 1; picker_focus 1
+is "${FG_CELLS[PK_FG]}|$PK_FIELD" "34|1" "leaving a field puts its cursor back on the chosen colour"
+picker_move 0 2; picker_preview; is "$RET" "00;34;41" "the preview takes the cursor of the focused field only (here the background)"
+picker_move 0 -2; picker_focus 0
 picker_load "38;5;208"
 is "${FG_CELLS[0]}" "38;5;208" "an existing 256-colour value gets its own cell in 16-colour mode"
 picker_value; is "$RET" "38;5;208" "...and is kept as it is"
@@ -63,7 +70,7 @@ is "${#FG_CELLS[@]}" 18 "16-colour mode offers default and 16 colours"
 OPT_256=1; picker_load "38;5;208"
 is "${#FG_CELLS[@]}" 257 "--256 offers the whole palette"
 is "${FG_CELLS[PK_FG]}" "38;5;208" "...with the current colour selected"
-picker_move 1 0; picker_value; is "$RET" "38;5;244" "moving down in the palette changes row"
+picker_move 1 0; picker_choose; picker_value; is "$RET" "38;5;244" "moving down in the palette changes row"
 OPT_256=0
 picker_load "01;03;31;44"
 PK_ATTRS=${PK_ATTRS/" 1 "/ }
@@ -105,21 +112,32 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   }
   fresh pairs.dircolors
   before=$(cat "$F")
-  # Enter on .tar/.TAR, two colours to the right, accept, save, confirm, back, quit
-  tui "$F" -- '\r' 'll' '\r' 's' 'y\n' '\n' 'q'
+  # Enter on .tar/.TAR, two colours to the right, choose, accept, save, confirm, back, quit
+  tui "$F" -- '\r' 'll' ' ' '\r' 's' 'y\n' '\n' 'q'
   is "$(sed -n 2,3p "$F")" ".tar 33${NL}.TAR 33" "a case pair is edited together and saved"
   is "$(sed -e 2,3d "$F")" "$(printf '%s\n' "$before" | sed -e 2,3d)" "the other lines are untouched"
   count "$F".bak-*; is "$RET" 1 "a backup is written"
+  has "$OUT" "Press Enter to return to the editor, q or Escape to quit now." "after writing, Enter goes back and q or Esc quits"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'y\n' 'q'
+  is "$RC|$(sed -n 2p "$F")" "0|.tar 32" "q after writing quits at once"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'y\n' '\033'
+  is "$RC|$(sed -n 2p "$F")" "0|.tar 32" "...and so does Escape"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'n\n' 'q'
+  has "$OUT" "q or Escape to quit without saving." "when nothing was written, the prompt says q loses the changes"
+  is "$RC|$(sed -n 2p "$F")" "0|.tar 31" "...and q then quits without writing"
   has "$OUT" "${ESC}[?1049l" "the alternate screen is left on exit"
   has "$OUT" "${ESC}[?25h" "the cursor is shown again on exit"
 
   fresh pairs.dircolors
   before=$(cat "$F")
-  tui "$F" -- '\r' 'l' '\r' 'u' 'q'
+  tui "$F" -- '\r' 'l' ' ' '\r' 'u' 'q'
   is "$(cat "$F")" "$before" "undo, then quit: nothing is written"
-  tui "$F" -- '\r' 'l' '\r' 's' 'n\n' '\n' 'q' 'y'
+  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'n\n' '\n' 'q' 'y'
   is "$(cat "$F")" "$before" "declining the review writes nothing"
-  tui "$F" --dry-run -- '\r' 'l' '\r' 's' '\n' 'q' 'y'
+  tui "$F" --dry-run -- '\r' 'l' ' ' '\r' 's' '\n' 'q' 'y'
   is "$(cat "$F")" "$before" "--dry-run never writes"
   # the terminal shrinks and grows again while the picker is open
   OUT=$({ sleep 0.8; printf '\r'; sleep 0.5; printf 'l'; sleep 3.6; printf '\033'; sleep 0.5; printf 'q'; sleep 0.3; printf 'y'; } |
@@ -132,12 +150,12 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   tui "$F" -- '\003'
   is "$RC" 0 "Ctrl-C without changes quits at once"
   has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"
-  tui "$F" -- '\r' 'l' '\r' '\003' 'n' 'j' '\003' '\003'
+  tui "$F" -- '\r' 'l' ' ' '\r' '\003' 'n' 'j' '\003' '\003'
   has "$OUT" "Quit without saving?" "Ctrl-C with unsaved changes asks"
   is "$RC" 0 "...n stays, a second Ctrl-C at the question quits"
   has "${OUT: -40}" "${ESC}[?1049l" "...and restores the terminal"
   is "$(cat "$F")" "$before" "...without writing"
-  tui "$F" -- '\r' 'l' '\r' '\r' '\003' 'y'
+  tui "$F" -- '\r' 'l' ' ' '\r' '\r' '\003' 'y'
   has "$OUT" "Quit without saving?" "Ctrl-C in the picker closes it and asks too"
   is "$RC|$(cat "$F")" "0|$before" "...y quits without writing"
   tui "$F" -- '\r' 'l' 'q' 'q'
@@ -150,18 +168,33 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   # entry, k goes up to it), one colour to the right, accept, confirm
   # (the section was not of one colour), save
   fresh pairs.dircolors
-  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n' '\n' 'q'
+  tui "$F" -- 'k' '\r' 'l' ' ' '\r' 'y' 's' 'y\n' '\n' 'q'
   is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 32${NL}.GZ 32${NL}.zip 32" "a whole section gets one colour"
   fresh pairs.dircolors
   before=$(cat "$F")
-  tui "$F" -- 'k' '\r' 'l' '\r' 'n' 'q'
+  tui "$F" -- 'k' '\r' 'l' ' ' '\r' 'n' 'q'
   is "$(cat "$F")" "$before" "...declining the question changes nothing"
   has "$OUT" "Give all 3 entries of archives the colour green? 3 of them change." "...the question names the colour and how many entries change"
+
+  # y on .tar, down, p on .gz/.GZ, down, d on .zip, save
+  fresh pairs.dircolors
+  tui "$F" -- 'y' 'j' 'p' 'j' 'd' 's' 'y\n' '\n' 'q'
+  is "$(sed -n 2,6p "$F")" ".tar 31${NL}.TAR 31${NL}.gz 31${NL}.GZ 31${NL}.zip 00" "y, p and d in the list are saved"
+
+  # on the heading, one colour to the right without Space, Enter: the
+  # chosen colour (red, most of the section) is given, not the cursor's
+  fresh pairs.dircolors
+  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n' '\n' 'q'
+  is "$(sed -n 5p "$F")" ".GZ 31" "Enter accepts the chosen colour, not the one under the cursor"
+  has "$OUT" "Give all 3 entries of archives the colour red? 1 of them change." "...and the question names the chosen colour"
+  fresh pairs.dircolors
+  tui "$F" -- '\r' 'l' '\r' 'q'
+  has "$OUT" "Nothing chosen: Space chooses" "Enter without Space on an entry says how to choose"
 
   # palette view: up to the heading of red, one colour to the right (green),
   # accept, save
   fresh pairs.dircolors
-  tui "$F" -- 'v' 'k' '\r' 'l' '\r' 's' 'y\n' '\n' 'q' 'q'
+  tui "$F" -- 'v' 'k' '\r' 'l' ' ' '\r' 's' 'y\n' '\n' 'q' 'q'
   has "$OUT" "palette view" "v switches to the palette view"
   is "$RC" 0 "...the first q leaves it, the second quits"
   is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 31${NL}.GZ 32${NL}.zip 32" "...where Enter on a colour recolours every entry of that colour"

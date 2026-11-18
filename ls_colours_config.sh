@@ -103,6 +103,14 @@ declare -A TYPE_SAMPLE=(
   [ex]=executable [su]=setuid [sg]=setgid [st]=sticky [ow]=other_writable
   [tw]=sticky_other_writable [ca]=capability [mh]=multihardlink
 )
+# The colours GNU ls gives a file type by itself, when the configuration
+# does not set it. Types missing here are not coloured (ORPHAN and MISSING
+# then look like a link, CAPABILITY and MULTIHARDLINK like a file).
+declare -A LS_DEFAULT=(
+  [rs]=0 [di]="01;34" [ln]="01;36" [pi]=33 [so]="01;35" ["do"]="01;35"
+  [bd]="01;33" [cd]="01;33" [ex]="01;32" [su]="37;41" [sg]="30;43"
+  [st]="37;44" [ow]="34;42" [tw]="30;42"
+)
 # Every code, in the order ls documents them. A string rather than a literal
 # list in the loops, because "fi" and "do" are shell keywords.
 TYPE_CODES="no fi rs di ln or mi pi so bd cd do ex su sg st ow tw ca mh lc rc ec cl"
@@ -737,7 +745,34 @@ make_diff() {
   done
 }
 
-# print_diff: show the pending changes with two lines of context.
+# diff_text LINE -> RET: a line as the diff shows it. With colours on, an
+# entry is its pattern or keyword drawn in its own colours, without the code;
+# a comment behind it stays, dimmed. Anything else is the line as it is.
+diff_text() {
+  local line=$1 key val rest note=""
+  RET=$line
+  (( USE_COLOUR )) || return 0
+  [[ $line =~ $RE_COMMENT || $line =~ $RE_BLANK ]] && return 0
+  [[ $line =~ $RE_ENTRY ]] || return 0
+  key=${BASH_REMATCH[2]} rest=${BASH_REMATCH[4]}
+  if [[ $key == [.*]* ]]; then
+    :
+  elif [[ -n ${TYPE_CODE[$key]:-} ]]; then
+    [[ " $TYPES_RAW " == *" ${TYPE_CODE[$key]} "* ]] && return 0
+  else
+    return 0
+  fi
+  val=${rest%%#*}
+  [[ $rest == *"#"* ]] && note="#${rest#*#}"
+  val=${val%"${val##*[![:space:]]}"}
+  [[ $val =~ $RE_SGR ]] || return 0
+  paint "$val" "$key"
+  [[ -n $note ]] && RET+=" ${C_D}$note${C_0}"
+  return 0
+}
+
+# print_diff: show the pending changes with two lines of context. The signs
+# and line numbers are green and red; the entries show their colours.
 print_diff() {
   local idx k a b show last=-1 total
   local -a near=()
@@ -764,9 +799,15 @@ print_diff() {
     fi
     last=$idx
     case $k in
-      =) printf '  %4s  %s\n' "$a" "${ORIG[a]}" ;;
-      -) printf '%s- %4s  %s%s\n' "$C_R" "$a" "${ORIG[a]}" "$C_0" ;;
-      +) printf '%s+ %4s  %s%s\n' "$C_G" "$b" "${SRC[b]}" "$C_0" ;;
+      =) diff_text "${ORIG[a]}"; printf '  %4s  %s\n' "$a" "$RET" ;;
+      -)
+        diff_text "${ORIG[a]}"
+        if [[ $RET == "${ORIG[a]}" ]]; then RET="$C_R$RET$C_0"; fi
+        printf '%s- %4s%s  %s\n' "$C_R" "$a" "$C_0" "$RET" ;;
+      +)
+        diff_text "${SRC[b]}"
+        if [[ $RET == "${SRC[b]}" ]]; then RET="$C_G$RET$C_0"; fi
+        printf '%s+ %4s%s  %s\n' "$C_G" "$b" "$C_0" "$RET" ;;
     esac
   done
   printf '%s%d line(s) removed, %d line(s) added.%s\n' "$C_B" "$DIFF_REMOVED" "$DIFF_ADDED" "$C_0"
@@ -2494,7 +2535,7 @@ COLOUR_NAMES=(black red green yellow blue magenta cyan white)
 # Picker state.
 declare -a FG_CELLS=() BG_CELLS=()
 declare -A PV=()                     # entry -> the value the open picker shows
-FG_B=1 BG_B=1 PK_START="" PK_FIELD=0 PK_FG=0 PK_BG=0 PK_AT=0
+FG_B=1 BG_B=1 PK_START="" PK_FIELD=0 PK_FG=0 PK_BG=0 PK_CHFG=0 PK_CHBG=0 PK_AT=0
 PK_ATTRS=" " PK_EXTRA="" PK_PAD=1 PK_ZERO=0 PK_RAW="" PK_TOUCHED=0
 PK_REF=0 PK_OLD=""                   # the entry in the picker, and its value before
 
@@ -2919,12 +2960,12 @@ setup_glyphs() {
   esac
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
-    GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▌" GL_OPEN="▾" GL_SHUT="▸"
-    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="••"
+    GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▶" GL_OPEN="▾" GL_SHUT="▸"
+    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="○○" GL_CHOSEN="●●"
     GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
-    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".."
+    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".." GL_CHOSEN="**"
     GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_LEFT="left" GL_K_RIGHT="right" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
@@ -3086,7 +3127,7 @@ render_footer() {
   local w=$1 pos=$3 out=" " len=1 h k l add room
   local -a hints=()
   case $2 in
-    picker) hints=("$GL_K_ARROWS|choose" "Tab|next field" "$GL_K_SPACE|toggle" "$GL_K_ENTER|accept"
+    picker) hints=("$GL_K_ARROWS|move" "Tab|next field" "$GL_K_SPACE|choose" "$GL_K_ENTER|accept"
                    "Esc/q|cancel" "?|help" "e|type a code" "r|reset") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
@@ -3094,7 +3135,7 @@ render_footer() {
             l="q|quit"
             [[ $T_VIEW == palette ]] && l="Esc/q|section view"
             hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "$l" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+                   "s|save" "$l" "y|copy" "p|paste" "d|clear" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
   esac
   room=$(( w - ${#pos} - 2 ))
   for h in "${hints[@]}"; do
@@ -3366,6 +3407,7 @@ swatch() {
       case $2 in
         1) RET="${ESC}[7mdf${ESC}[0m" ;;
         2) RET="${C_B}${C_U}df${C_0}" ;;
+        3) RET="${C_B}${C_C}df${C_0}" ;;
         *) RET="${C_D}df${C_0}" ;;
       esac
       return ;;
@@ -3387,6 +3429,7 @@ swatch() {
   case $2 in
     1) text=$PK_MARK ;;
     2) text=$GL_SAVED ;;
+    3) text=$GL_CHOSEN ;;
   esac
   if (( ! USE_COLOUR )); then
     RET=$text
@@ -3417,6 +3460,7 @@ picker_cells() {
   for i in "${!BG_CELLS[@]}"; do [[ ${BG_CELLS[i]} == "$bg" ]] && PK_BG=$i; done
   if (( PK_FG < 0 )); then FG_CELLS=("$fg" "${FG_CELLS[@]}"); FG_B=2 PK_FG=0; fi
   if (( PK_BG < 0 )); then BG_CELLS=("$bg" "${BG_CELLS[@]}"); BG_B=2 PK_BG=0; fi
+  PK_CHFG=$PK_FG PK_CHBG=$PK_BG
 }
 
 # The palette of a field is drawn in rows: row 0 holds the cells in front
@@ -3458,23 +3502,72 @@ grid_row() {
   fi
 }
 
-# picker_value -> RET: the value the picker stands for at the moment.
+# PK_FG and PK_BG are the cursor in each palette, PK_CHFG and PK_CHBG the
+# colours chosen with Space. Only the chosen ones are accepted with Enter;
+# the cursor of the focused field is shown as a preview.
+
+# picker_value -> RET: the value chosen in the picker at the moment.
 picker_value() {
   if [[ -n $PK_RAW ]]; then RET=$PK_RAW; return; fi
-  sgr_compose "${FG_CELLS[PK_FG]}" "${BG_CELLS[PK_BG]}" "$PK_ATTRS" "$PK_EXTRA" "$PK_PAD" "$PK_ZERO"
+  sgr_compose "${FG_CELLS[PK_CHFG]}" "${BG_CELLS[PK_CHBG]}" "$PK_ATTRS" "$PK_EXTRA" "$PK_PAD" "$PK_ZERO"
 }
 
-# picker_move DY DX: move inside the grid of the focused field; leaving it at
-# the top or bottom goes to the neighbouring field. Up and down keep the
-# column on screen.
+# picker_preview -> RET: the chosen value, with the colour under the cursor
+# of the focused field in place of the chosen one.
+picker_preview() {
+  local fg=$PK_CHFG bg=$PK_CHBG
+  (( PK_FIELD == 0 )) && fg=$PK_FG
+  (( PK_FIELD == 1 )) && bg=$PK_BG
+  if (( fg == PK_CHFG && bg == PK_CHBG )); then picker_value; return; fi
+  sgr_compose "${FG_CELLS[fg]}" "${BG_CELLS[bg]}" "$PK_ATTRS" "$PK_EXTRA" "$PK_PAD" "$PK_ZERO"
+}
+
+# picker_choose: Space. In a palette the colour under the cursor becomes the
+# chosen one (nothing happens when it already is); in the attributes the
+# switch under the cursor goes on or off.
+picker_choose() {
+  local codes=(1 2 4 7 5) a
+  case $PK_FIELD in
+    0) (( PK_FG == PK_CHFG )) && return; PK_CHFG=$PK_FG ;;
+    1) (( PK_BG == PK_CHBG )) && return; PK_CHBG=$PK_BG ;;
+    *)
+      a=${codes[PK_AT]}
+      if [[ $PK_ATTRS == *" $a "* ]]; then PK_ATTRS=${PK_ATTRS/" $a "/ }; else PK_ATTRS+="$a "; fi ;;
+  esac
+  PK_RAW="" PK_TOUCHED=1
+}
+
+# picker_focus FIELD: give FIELD the focus. The cursor of the field that is
+# left goes back to its chosen colour, so no hidden position stays behind.
+picker_focus() {
+  PK_FG=$PK_CHFG PK_BG=$PK_CHBG PK_FIELD=$1
+}
+
+# picker_move DY DX: move the cursor inside the grid of the focused field;
+# leaving it at the top or bottom goes to the neighbouring field. Up and down
+# keep the column on screen. Moving never changes what is chosen.
+declare -a PK_AT_ROW=(0 0 0 0 0) PK_AT_X=(0 10 18 31 43)
 picker_move() {
-  local dy=$1 dx=$2 idx b ncells row col vis
-  PK_RAW=""
+  local dy=$1 dx=$2 idx b ncells row col vis i best d bd
   if (( PK_FIELD == 2 )); then
-    PK_AT=$(( PK_AT + dx ))
-    (( PK_AT < 0 )) && PK_AT=0
-    (( PK_AT > 4 )) && PK_AT=4
-    (( dy < 0 )) && PK_FIELD=1
+    if (( dx )); then
+      PK_AT=$(( PK_AT + dx ))
+      (( PK_AT < 0 )) && PK_AT=0
+      (( PK_AT > 4 )) && PK_AT=4
+      return
+    fi
+    # the switches wrap on a narrow pane: up and down go row by row, to
+    # the switch nearest on screen
+    row=$(( PK_AT_ROW[PK_AT] + dy ))
+    if (( row < 0 )); then picker_focus 1; return; fi
+    best=-1 bd=9999
+    for i in 0 1 2 3 4; do
+      (( PK_AT_ROW[i] == row )) || continue
+      d=$(( PK_AT_X[i] - PK_AT_X[PK_AT] ))
+      (( d < 0 )) && d=$(( -d ))
+      if (( d < bd )); then bd=$d best=$i; fi
+    done
+    (( best >= 0 )) && PK_AT=$best
     return
   fi
   if (( PK_FIELD == 0 )); then
@@ -3493,10 +3586,10 @@ picker_move() {
     vis=$(( RET3 + col ))
     grid_rows_n "$b"
     if (( row < 0 )); then
-      (( PK_FIELD > 0 )) && PK_FIELD=$(( PK_FIELD - 1 ))
+      (( PK_FIELD > 0 )) && picker_focus $(( PK_FIELD - 1 ))
       return
     elif (( row >= RET )); then
-      PK_FIELD=$(( PK_FIELD + 1 ))
+      picker_focus $(( PK_FIELD + 1 ))
       return
     fi
     grid_start "$row" "$b"
@@ -3505,7 +3598,6 @@ picker_move() {
     (( col >= RET2 )) && col=$(( RET2 - 1 ))
     idx=$(( RET + col ))
   fi
-  PK_TOUCHED=1
   if (( PK_FIELD == 0 )); then PK_FG=$idx; else PK_BG=$idx; fi
 }
 
@@ -3539,16 +3631,23 @@ wrap_words() {
 
 # field_rows FIELD W: the label and the palette rows of a field.
 field_rows() {
-  local field=$1 w=$2 idx b saved rows r i line first last name len
+  local field=$1 w=$2 idx b saved chosen rows r i line first last name len
   local -a cells=()
   if (( field == 0 )); then
-    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B saved=$PK_SFG name="Foreground"
+    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B saved=$PK_SFG name="Foreground" chosen=$PK_CHFG
   else
-    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B saved=$PK_SBG name="Background"
+    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B saved=$PK_SBG name="Background" chosen=$PK_CHBG
   fi
+  # only the focused field shows its cursor
+  (( PK_FIELD == field )) || idx=$chosen
   describe_colour "${cells[idx]}"
   if (( PK_FIELD == field )); then
-    rp_add "  ${C_B}${C_C}$name${C_0}   ${C_B}$RET${C_0}"
+    line="  ${C_B}${C_C}$name${C_0}   ${C_B}$RET${C_0}"
+    if (( idx != chosen )); then
+      describe_colour "${cells[chosen]}"
+      line+="   ${C_D}chosen: $RET${C_0}"
+    fi
+    rp_add "$line"
   else
     rp_add "  ${C_D}$name${C_0}   $RET"
   fi
@@ -3565,6 +3664,7 @@ field_rows() {
     for (( i = first; i < last && i < ${#cells[@]}; i++ )); do
       if (( r < 2 )); then len=$(( len + 3 )); else len=$(( len + 2 )); fi
       if (( i == idx )); then swatch "${cells[i]}" 1
+      elif (( i == chosen )); then swatch "${cells[i]}" 3
       elif (( i == saved )); then swatch "${cells[i]}" 2
       else swatch "${cells[i]}" 0
       fi
@@ -3583,11 +3683,11 @@ field_rows() {
 declare -a RP_TXT=() RP_OPT=() RP_W=() RP_LEN=()
 PK_CW=36 PK_SFG=-1 PK_SBG=-1 PK_FILE="" RP_FOCUS=0
 render_picker() {
-  local w=$1 h=$2 ref=$PK_REF value title sec pad i line len nw name names=(bold dim underline reverse blink) codes=(1 2 4 7 5)
+  local w=$1 h=$2 ref=$PK_REF value title sec pad i r line len nw name names=(bold dim underline reverse blink) codes=(1 2 4 7 5)
   local -a keep=() keepw=()
   RP_TXT=() RP_OPT=() RP_W=() RP_LEN=() RP_FOCUS=0
   if (( w >= 76 )); then PK_CW=36; else PK_CW=18; fi
-  picker_value
+  picker_preview
   value=$RET
   # what is being edited, and where it lives
   title=${E_LABEL[ref]} sec=${E_SEC[ref]}
@@ -3626,11 +3726,13 @@ render_picker() {
   else
     rp_add "  ${C_D}Attributes${C_0}"
   fi
-  line="  " len=2
+  line="  " len=2 r=0
   for i in 0 1 2 3 4; do
     title="[ ] ${names[i]}"
     [[ $PK_ATTRS == *" ${codes[i]} "* ]] && title="[x] ${names[i]}"
-    if (( len + ${#title} + 1 > w && len > 2 )); then rp_add "$line"; line="  " len=2; fi
+    if (( len + ${#title} + 1 > w && len > 2 )); then rp_add "$line"; line="  " len=2 r=$(( r + 1 )); fi
+    # where the switch is, for moving up and down between the rows
+    PK_AT_ROW[i]=$r PK_AT_X[i]=$len
     if (( PK_FIELD == 2 && PK_AT == i )); then
       line+=" ${C_B}${C_C}$title${C_0} "
     else
@@ -3733,8 +3835,8 @@ file_value() {
 preview_set() {
   local i
   PV=()
-  if (( PK_TOUCHED )); then
-    picker_value
+  picker_preview
+  if (( PK_TOUCHED )) || [[ $RET != "$PK_START" ]]; then
     for i in $PK_ENTRIES; do PV[$i]=$RET; done
   fi
   if (( PK_GRP >= 0 )); then summarise "$PK_GRP"; else summarise "${E_GRP[PK_REF]}"; fi
@@ -3782,7 +3884,7 @@ ask_yes() {
 # group (ENTRY is then the first of them). Stages the result on Enter.
 PK_GRP=-1 PK_ENTRIES="" PK_GDIFF=0 PK_GNAME=""
 open_picker() {
-  local ref=$1 old v codes=(1 2 4 7 5) a dirty=1 e c
+  local ref=$1 old v a dirty=1 e c
   local -A tally=()
   PK_GRP=${2:--1}
   if (( PK_GRP >= 0 )); then
@@ -3837,14 +3939,9 @@ open_picker() {
       down|j)  picker_move 1 0 ;;
       left|h)  picker_move 0 -1 ;;
       right|l) picker_move 0 1 ;;
-      tab)     PK_FIELD=$(( (PK_FIELD + 1) % 3 )) ;;
-      backtab) PK_FIELD=$(( (PK_FIELD + 2) % 3 )) ;;
-      space)
-        if (( PK_FIELD == 2 )); then
-          a=${codes[PK_AT]}
-          PK_RAW="" PK_TOUCHED=1
-          if [[ $PK_ATTRS == *" $a "* ]]; then PK_ATTRS=${PK_ATTRS/" $a "/ }; else PK_ATTRS+="$a "; fi
-        fi ;;
+      tab)     picker_focus $(( (PK_FIELD + 1) % 3 )) ;;
+      backtab) picker_focus $(( (PK_FIELD + 2) % 3 )) ;;
+      space)   picker_choose ;;
       r)
         # back to the colour in the file
         picker_load "$PK_FILE"
@@ -3868,6 +3965,10 @@ open_picker() {
       esc|q|eof) PV=(); T_FOCUS=list T_CTX=list; build_rows; return 1 ;;
     esac
   done
+  # Enter accepts what was chosen, not what is under the cursor
+  e=0
+  (( PK_FIELD < 2 && (PK_FG != PK_CHFG || PK_BG != PK_CHBG) )) && e=1
+  picker_focus "$PK_FIELD"
   T_FOCUS=list T_CTX=list
   # a group that was not of one colour: say how many entries change, and
   # ask, with the new colours still showing in the list
@@ -3894,7 +3995,11 @@ open_picker() {
     fi
   fi
   PV=()
-  if (( ! PK_TOUCHED )); then build_rows; return 1; fi
+  if (( ! PK_TOUCHED )); then
+    build_rows
+    (( e )) && T_MSG="Nothing chosen: Space chooses the colour under the cursor, Enter then accepts it."
+    return 1
+  fi
   stage_value "$PK_ENTRIES" "$v"
   # in the palette the group of the new colour takes the cursor
   if (( PK_GRP >= 0 )) && [[ $T_VIEW == palette ]]; then same_colour "$v"; CUR_ID="h:$RET"; fi
@@ -3958,6 +4063,106 @@ undo_all() {
   fi
 }
 
+# --- copy, paste and clear ----------------------------------------------------
+
+CLIP="" CLIP_FROM=""
+
+# copy_entry: y. The colour of the entry under the cursor, staged changes
+# included, is kept for p until something else is copied.
+copy_entry() {
+  local e
+  if ! cur_entry; then T_MSG="Put the cursor on an entry to copy its colour."; return; fi
+  e=$RET
+  entry_values "$e"
+  CLIP=$EV_EFF CLIP_FROM=${E_LABEL[e]}
+  describe_value "$CLIP"
+  T_MSG="Copied $RET ($CLIP) from $CLIP_FROM; p pastes it"
+}
+
+# clear_value ENTRY -> RET: the value an entry gets when it is cleared:
+# plain, or for a file type the colour ls gives it by itself.
+clear_value() {
+  local first=${E_LINES[$1]# }
+  first=${first%% *}
+  RET="00"
+  [[ ${L_KIND[first]} == type ]] && RET=${LS_DEFAULT[${L_NORM[first]}]:-00}
+}
+
+# entry_target KIND ENTRY -> RET: the new value for p (paste) or d (clear).
+entry_target() {
+  if [[ $1 == paste ]]; then RET=$CLIP; else clear_value "$2"; fi
+}
+
+# apply_here KIND: p and d. On an entry it is changed at once; on a heading
+# every entry of the group, after a question with the result in the list.
+apply_here() {
+  local kind=$1 list what e v n=0 grp=-1 q
+  if [[ $kind == paste && -z $CLIP ]]; then
+    T_MSG="Nothing copied yet: y copies the colour of the entry under the cursor."
+    return
+  fi
+  if cur_entry; then
+    list=" $RET" what=${E_LABEL[RET]}
+  elif [[ ${ROW_KIND[T_CUR]:-} == h ]]; then
+    grp=${ROW_REF[T_CUR]}
+    list=${G_ENTRIES[grp]}
+    group_name "$grp"
+    what=$RET
+    [[ $T_VIEW == palette ]] && what="the $RET entries"
+  else
+    return
+  fi
+  for e in $list; do
+    entry_target "$kind" "$e"
+    count_changes " $e" "$RET"
+    n=$(( n + RET ))
+  done
+  if (( ! n )); then
+    if [[ $kind == paste ]]; then T_MSG="$what already looks like that."; else T_MSG="$what is already clear."; fi
+    return
+  fi
+  if (( grp >= 0 )); then
+    PV=()
+    for e in $list; do entry_target "$kind" "$e"; PV[$e]=$RET; done
+    summarise "$grp"
+    draw_screen
+    if [[ -n $T_FILTER ]]; then q="the ${G_N[grp]} matching entries"; else q="all ${G_N[grp]} entries"; fi
+    if [[ $kind == paste ]]; then
+      describe_value "$CLIP"
+      q="Give $q of $what the colour $RET? $n of them change."
+    else
+      q="Clear $q of $what? $n of them change."
+    fi
+    PV=()
+    if ! ask_yes "$q"; then build_rows; T_MSG="Nothing changed."; return; fi
+  fi
+  # entries that would look the same keep their spelling
+  for e in $list; do
+    entry_target "$kind" "$e"
+    v=$RET
+    count_changes " $e" "$v"
+    (( RET )) && stage_value " $e" "$v"
+  done
+  # in the palette a pasted group follows its new colour
+  if (( grp >= 0 )) && [[ $T_VIEW == palette && $kind == paste ]]; then same_colour "$CLIP"; CUR_ID="h:$RET"; fi
+  build_rows
+  if [[ $kind == paste ]]; then
+    describe_value "$CLIP"
+    v="$RET ($CLIP)"
+    if (( grp >= 0 )); then T_MSG="$what: $n entries changed to $v"; else T_MSG="$what set to $v"; fi
+    T_MSG+="; the copy stays for more pastes"
+  elif (( grp >= 0 )); then
+    T_MSG="$what: $n entries cleared"
+  else
+    clear_value "${list# }"
+    v=$RET
+    describe_value "$v"
+    T_MSG="$what cleared to $RET ($v)"
+    # ls draws broken links in the colour of links when they have none
+    case $what in ORPHAN|MISSING) T_MSG+="; ls then shows it in the colour of LINK" ;; esac
+  fi
+}
+
 # revert_count -> RET: how many entries have staged changes.
 revert_count() {
   local e i n=0
@@ -3969,9 +4174,11 @@ revert_count() {
   RET=$n
 }
 
-# save_staged: leave the full screen, show the diff, ask, write, come back.
+# save_staged: leave the full screen, show the diff, ask and write. Then
+# Enter goes back to the editor, q or Esc quits it (EDIT_DONE).
+EDIT_DONE=0
 save_staged() {
-  local i
+  local i what="quit now"
   if (( ! ${#ST[@]} )); then T_MSG="Nothing to save."; return; fi
   for i in "${!ST[@]}"; do set_value "$i" "${ST[i]}"; done
   tui_suspend
@@ -3988,9 +4195,16 @@ save_staged() {
     N=$(( ${#SRC[@]} - 1 ))
     parse
     T_MSG="Not saved; your changes are still staged."
+    what="quit without saving"
   fi
-  printf '\nPress Enter to return to the editor. '
-  IFS= read -r i
+  printf '\nPress Enter to return to the editor, q or Escape to %s. ' "$what"
+  while :; do
+    while ! read_key 1; do :; done
+    case $KEY in
+      enter) break ;;
+      q|Q|esc|eof) printf '\n'; EDIT_DONE=1; trap 'INTR=1' INT; return ;;
+    esac
+  done
   trap 'INTR=1' INT
   tui_start
   term_size
@@ -4023,16 +4237,19 @@ help_lines() {
   hk "c" "join or separate case pairs such as .deb / .DEB"
   hk "u" "undo the changes of the entry under the cursor (on a heading: of all its entries)"
   hk "U" "undo all changes (asks first)"
-  hk "s" "review the changes and save them"
+  hk "y" "copy the colour of the entry under the cursor"
+  hk "p" "paste the copied colour on the entry (on a heading: on every entry of it, asks first); the copy stays for more pastes"
+  hk "d" "clear the entry: plain (00), or for a file type the colour ls gives it by itself (on a heading: every entry of it, asks first)"
+  hk "s" "review the changes and save them; afterwards Enter goes back to the editor, q or Esc quits"
   hk "q, Ctrl-C" "quit (asks when there are unsaved changes)"
   hk "?" "this help"
   HELP+=("" "Keys in the colour picker")
-  hk "$a, h j k l" "choose a colour or an attribute"
+  hk "$a, h j k l" "move the cursor over the colours and attributes"
   hk "Tab / Shift-Tab" "next / previous field (foreground, background, attributes)"
-  hk "$sp" "switch an attribute on or off"
+  hk "$sp" "choose the colour under the cursor, or switch an attribute on or off"
   hk "e" "type an SGR code by hand"
   hk "r" "back to the colour in the file"
-  hk "$n" "accept"
+  hk "$n" "accept the chosen colours"
   hk "Esc, q" "cancel"
   hk "?" "this help"
   HELP+=(""
@@ -4131,7 +4348,9 @@ Keys: arrows or h/j/k/l to move, Enter to edit (on a heading: the whole
 section), Space to fold a section, z / Z to fold or unfold all, / to search,
 v for the palette view (entries grouped by colour), x to switch between
 colours in words and codes, c for case pairs, u to undo the entry under the
-cursor, U to undo everything, s to save, q to quit, ? for the full list.
+cursor, U to undo everything, y and p to copy and paste a colour, d to clear
+an entry, s to save, q to quit, ? for the full list. In the picker the
+arrows move the cursor and Space chooses the colour under it.
 
 edit only changes entries that exist. Adding entries and reorganising the
 file is the job of fix.
@@ -4235,7 +4454,10 @@ cmd_edit() {
       x) T_RAW=$(( ! T_RAW )) ;;
       u) undo_here ;;
       U) undo_all ;;
-      s) save_staged ;;
+      y) copy_entry ;;
+      p) apply_here paste ;;
+      d) apply_here clear ;;
+      s) save_staged; (( EDIT_DONE )) && break ;;
       \?) show_help ;;
       q|quit|eof)
         # q leaves the palette view first

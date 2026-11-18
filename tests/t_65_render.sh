@@ -163,7 +163,7 @@ PK_REF=0 PK_OLD=31 PK_START=31 PK_FILE=31 T_FOCUS=picker T_CTX=picker
 picker_load 31
 frame_text
 has "$RET" "Foreground   red" "below $SPLIT_COLS columns the picker takes the place of the list"
-has "$RET" "arrows choose" "...with its own hints (in ASCII: 'arrows', otherwise arrow symbols)"
+has "$RET" "arrows move" "...with its own hints (in ASCII: 'arrows', otherwise arrow symbols)"
 T_FOCUS=list T_CTX=list
 ROWS=12
 
@@ -171,12 +171,12 @@ ROWS=12
 if ( LC_ALL=C.UTF-8; x="─"; (( ${#x} == 1 )) ) 2>/dev/null; then
   CUR_ID="e:0"; build_rows
   out=$(LC_ALL=C.UTF-8; OPT_ASCII=0; setup_glyphs; frame_text; printf '%s' "$RET")
-  has "$out" "▌    example.tar" "UTF-8: the cursor is a bar"
+  has "$out" "▶    example.tar" "UTF-8: the cursor is an arrow"
   has "$out" "────────────" "UTF-8: rules are lines"
   is "$(LC_ALL=C.UTF-8; widest "$out"; printf '%s' "$RET")" 60 "UTF-8: widths are counted in characters, not bytes"
   is "$(LC_ALL=C.UTF-8; OPT_ASCII=0; setup_glyphs; widths_ok)" "" "UTF-8: each row's recorded width matches its text"
   out=$(LC_ALL=C.UTF-8; OPT_ASCII=1; setup_glyphs; frame_text; printf '%s' "$RET")
-  hasnt "$out" "▌" "--ascii wins over the locale"
+  hasnt "$out" "▶" "--ascii wins over the locale"
 else
   skip "UTF-8 frame" "no C.UTF-8 locale"
 fi
@@ -250,8 +250,13 @@ is "$FG_B|$PK_SFG|$PK_FG" "1|3|3" "the colour in the file has a mark of its own 
 picker_move 0 1
 render_picker 44 30
 out=$(printf '%s\n' "${RP_TXT[@]}")
-has "$out" "df $GL_SW $GL_SW $GL_SAVED $PK_MARK $GL_SW" "the saved colour and the cursor are marked differently"
-has "$out" "  Foreground   yellow" "the field names the colour under the cursor"
+has "$out" "df $GL_SW $GL_SW $GL_CHOSEN $PK_MARK $GL_SW" "the chosen colour and the cursor are marked differently"
+has "$out" "  Foreground   yellow   chosen: green" "the field names the colour under the cursor, and the chosen one"
+picker_choose; picker_move 0 1
+render_picker 44 30
+out=$(printf '%s\n' "${RP_TXT[@]}")
+has "$out" "df $GL_SW $GL_SW $GL_SAVED $GL_CHOSEN $PK_MARK" "...and the colour in the file keeps a mark of its own"
+picker_move 0 -1
 picker_move 1 0
 is "${FG_CELLS[PK_FG]}" 93 "down from a normal colour is its bright twin"
 picker_move -1 0; picker_move -1 0
@@ -287,6 +292,29 @@ is "$(grid_rows_n 1; printf %s "$RET")" 9 "full width: 2 rows of 16 colours, 6 o
 PK_CW=18
 is "$(grid_rows_n 1; printf %s "$RET")" 16 "in the pane: 2, 12 and 2"
 OPT_256=0 PK_CW=36
+
+group "edit: moving through the attributes"
+OPT_256=0
+picker_open_state 1
+# at 30 columns the switches wrap: bold dim / underline reverse / blink
+render_picker 30 40
+is "${PK_AT_ROW[*]}" "0 0 1 1 2" "the picker knows on which row each switch is"
+PK_FIELD=1; picker_move 1 0; picker_move 1 0
+is "$PK_FIELD|$PK_AT" "2|0" "down from the bright row of the background goes to the attributes"
+PK_AT=1; picker_move 1 0
+is "$PK_AT" 3 "down from dim is reverse, the switch nearest on screen"
+picker_move 1 0
+is "$PK_AT" 4 "...then blink on the last row"
+picker_move 1 0
+is "$PK_FIELD|$PK_AT" "2|4" "down from the last row stays"
+picker_move -1 0; picker_move -1 0
+is "$PK_AT" 0 "up goes back row by row (blink, underline, bold)"
+picker_move -1 0
+is "$PK_FIELD" 1 "up from the first row goes to the background"
+PK_FIELD=2 PK_AT=0; picker_move 0 1
+is "$PK_AT" 1 "left and right go from switch to switch"
+PK_ATTRS=" "; picker_choose
+is "$PK_ATTRS|$PK_TOUCHED" " 2 |1" "Space switches an attribute on"
 
 group "edit: every key is described"
 # Every key the list, the picker and the help screen react to must appear in
@@ -377,6 +405,61 @@ has "$RET" "archives, matches only" "with a search on, the picker says only the 
 has "$RET" "1 matching" "...and how many they are"
 T_FILTER=""
 PV=() PK_GRP=-1 T_FOCUS=list T_CTX=list; build_rows
+
+group "edit: copy, paste and clear"
+render_state
+# the question is answered from ANSWER, and the screen is not drawn
+real_ask=$(declare -f ask_yes); real_draw=$(declare -f draw_screen)
+ASKED="" ANSWER=y
+ask_yes() { ASKED=$1; [[ $ANSWER == y ]]; }
+draw_screen() { :; }
+CUR_ID="e:3"; place_cursor
+apply_here paste
+is "${#ST[@]}|$T_MSG" "0|Nothing copied yet: y copies the colour of the entry under the cursor." "p without a copy says how to make one"
+copy_entry
+is "$CLIP|$CLIP_FROM" "35|.png / .PNG" "y copies the colour of the entry under the cursor"
+CUR_ID="e:0"; place_cursor
+apply_here paste
+is "${ST[2]}|${ST[3]}|$CLIP" "35|35|35" "p puts it on another entry, both spellings, and the copy stays"
+CUR_ID="e:2"; place_cursor
+apply_here paste
+is "${ST[6]}" 35 "...so it can be pasted again"
+ST[2]=33 ST[3]=33
+CUR_ID="e:0"; place_cursor; copy_entry
+is "$CLIP" 33 "y copies the staged colour, not the one in the file"
+CUR_ID="h:archives"; place_cursor
+ANSWER=n; apply_here paste
+is "${ST[6]}|$T_MSG" "35|Nothing changed." "p on a heading asks first; no changes nothing"
+has "$ASKED" "Give all 3 entries of archives the colour yellow? 2 of them change." "...and the question says how many change"
+ANSWER=y; apply_here paste
+is "${ST[4]}|${ST[5]}|${ST[6]}" "33|33|33" "...yes gives every entry of the section the copy"
+y_msg=$T_MSG
+has "$y_msg" "the copy stays" "...and says the copy is kept"
+ST=(); build_rows
+CUR_ID="e:3"; place_cursor
+apply_here clear
+is "${ST[9]}|${ST[10]}" "00|00" "d clears a pattern to 00"
+has "$T_MSG" "cleared" "...and says so"
+ST=(); build_rows
+CUR_ID="h:images"; place_cursor
+ANSWER=y; apply_here clear
+has "$ASKED" "Clear all 2 entries of images? 2 of them change." "d on a heading asks first"
+is "${ST[9]}|${ST[11]}" "00|00" "...and clears every entry of it"
+ST=()
+# file types get the colour ls gives them by itself
+read_file "$FIX/problems.dircolors"; build_entries; build_rows
+declare -A t_e=(); for i in "${!E_LABEL[@]}"; do t_e[${E_LABEL[i]}]=$i; done
+clear_value "${t_e[ORPHAN]}"; is "$RET" "00" "a type ls does not colour (ORPHAN) is cleared to 00"
+clear_value "${t_e[DIR]}"; is "$RET" "01;34" "DIR is cleared to the colour ls gives it by itself"
+clear_value "${t_e[LINK]}"; is "$RET" "01;36" "...and so is LINK"
+CUR_ID="e:${t_e[DIR]}"; place_cursor
+apply_here clear
+is "${#ST[@]}|$T_MSG" "0|DIR is already clear." "d on a type that already has the ls colour changes nothing"
+CUR_ID="e:${t_e[ORPHAN]}"; place_cursor
+apply_here clear
+has "$T_MSG" "ls then shows it in the colour of LINK" "clearing ORPHAN says how ls shows it then"
+eval "$real_ask"; eval "$real_draw"
+ST=()
 
 group "edit: palette view"
 render_state
