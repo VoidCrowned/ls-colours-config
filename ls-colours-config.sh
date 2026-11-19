@@ -220,12 +220,12 @@ setup_colour() {
   esac
   if (( USE_COLOUR )); then
     C_B="${ESC}[1m" C_D="${ESC}[2m" C_R="${ESC}[31m" C_G="${ESC}[32m"
-    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_U="${ESC}[4m" C_0="${ESC}[0m"
+    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_0="${ESC}[0m"
   else
-    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_U="" C_0=""
+    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
   fi
 }
-C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_U="" C_0=""
+C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
 
 # paint CODE TEXT -> RET: TEXT wrapped in the SGR code, the way ls prints it.
 paint() {
