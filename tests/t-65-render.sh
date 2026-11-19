@@ -246,16 +246,15 @@ has "$RET" ">    example.tar       .tar / .TAR     red" "cancelling leaves the l
 
 group "edit: the palette"
 picker_open_state 1
-is "$FG_B|$PK_SFG|$PK_FG" "1|3|3" "the colour in the file has a mark of its own (here also the cursor)"
 picker_move 0 1
 render_picker 44 30
 out=$(printf '%s\n' "${RP_TXT[@]}")
-has "$out" "df $GL_SW $GL_SW $GL_CHOSEN $PK_MARK $GL_SW" "the chosen colour and the cursor are marked differently"
+has "$out" "df $GL_SW $GL_SW $GL_SW $PK_MARK $GL_SW" "only the cursor is marked in the palette"
 has "$out" "  Foreground   yellow   chosen: green" "the field names the colour under the cursor, and the chosen one"
 picker_choose; picker_move 0 1
 render_picker 44 30
 out=$(printf '%s\n' "${RP_TXT[@]}")
-has "$out" "df $GL_SW $GL_SW $GL_SAVED $GL_CHOSEN $PK_MARK" "...and the colour in the file keeps a mark of its own"
+has "$out" "df $GL_SW $GL_SW $GL_SW $GL_SW $PK_MARK" "...also once another colour is chosen: neither it nor the colour in the file is marked"
 picker_move 0 -1
 picker_move 1 0
 is "${FG_CELLS[PK_FG]}" 93 "down from a normal colour is its bright twin"

@@ -2,11 +2,6 @@
 
 My terminal tool for the file that decides the colours of `ls`: it previews, checks, repairs and edits a GNU `dircolors` configuration. One bash script, no dependencies beyond bash and GNU coreutils.
 
-## The editor
-<details close><summary>(Click to expand)</summary>
-<br>
-<p align="center"><img src="docs/edit-view.png" alt="The editor with the picker beside the list: the file types section unfolded, each entry in its colour with the colour in words, and on the right the new and old sample, the foreground and background palettes and the attribute switches"></p></details>
-
 ## Select from list/categories
 <details close><summary>(Click to expand)</summary>
 <br>
