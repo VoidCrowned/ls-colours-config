@@ -41,4 +41,4 @@ is "$RC" 1 "exit status 1 when dircolors rejects the file"
 has "$OUT" "rejects this file" "says that dircolors rejects the file"
 has "$OUT" "Errors (1)" "...and still prints the findings"
 run preview --help
-has "$OUT" "Usage: ls_colours_config.sh preview" "preview --help"
+has "$OUT" "Usage: ls-colours-config.sh preview" "preview --help"

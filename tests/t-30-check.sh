@@ -113,4 +113,4 @@ has "$OUT" "${ESC}[" "--color is accepted as a spelling of --colour"
 run check "$WORK/does-not-exist"
 is "$RC" 2 "missing file is a usage error"
 run check --help
-has "$OUT" "Usage: ls_colours_config.sh check" "check --help"
+has "$OUT" "Usage: ls-colours-config.sh check" "check --help"
