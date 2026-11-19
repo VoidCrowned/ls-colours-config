@@ -2961,11 +2961,11 @@ setup_glyphs() {
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▶" GL_OPEN="▾" GL_SHUT="▸"
-    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌" GL_SAVED="○○" GL_CHOSEN="●●"
+    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌"
     GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
-    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>" GL_SAVED=".." GL_CHOSEN="**"
+    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>"
     GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_LEFT="left" GL_K_RIGHT="right" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
@@ -3399,15 +3399,13 @@ draw_screen() {
 # --- the colour picker -------------------------------------------------------
 
 # swatch VALUE STATE -> RET: a two-character cell showing the colour. STATE 1
-# is the cell under the picker's cursor, 2 the colour that is in the file.
+# is the cell under the picker's cursor.
 swatch() {
   local v=$1 bg n light=0 text="  "
   case $v in
     "")
       case $2 in
         1) RET="${ESC}[7mdf${ESC}[0m" ;;
-        2) RET="${C_B}${C_U}df${C_0}" ;;
-        3) RET="${C_B}${C_C}df${C_0}" ;;
         *) RET="${C_D}df${C_0}" ;;
       esac
       return ;;
@@ -3426,11 +3424,7 @@ swatch() {
   else
     (( n >= 244 )) && light=1
   fi
-  case $2 in
-    1) text=$PK_MARK ;;
-    2) text=$GL_SAVED ;;
-    3) text=$GL_CHOSEN ;;
-  esac
+  (( $2 == 1 )) && text=$PK_MARK
   if (( ! USE_COLOUR )); then
     RET=$text
     [[ $text == "  " ]] && RET=$GL_SW
@@ -3631,12 +3625,12 @@ wrap_words() {
 
 # field_rows FIELD W: the label and the palette rows of a field.
 field_rows() {
-  local field=$1 w=$2 idx b saved chosen rows r i line first last name len
+  local field=$1 w=$2 idx b chosen rows r i line first last name len
   local -a cells=()
   if (( field == 0 )); then
-    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B saved=$PK_SFG name="Foreground" chosen=$PK_CHFG
+    cells=("${FG_CELLS[@]}") idx=$PK_FG b=$FG_B name="Foreground" chosen=$PK_CHFG
   else
-    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B saved=$PK_SBG name="Background" chosen=$PK_CHBG
+    cells=("${BG_CELLS[@]}") idx=$PK_BG b=$BG_B name="Background" chosen=$PK_CHBG
   fi
   # only the focused field shows its cursor
   (( PK_FIELD == field )) || idx=$chosen
@@ -3663,11 +3657,7 @@ field_rows() {
     len=${#line}
     for (( i = first; i < last && i < ${#cells[@]}; i++ )); do
       if (( r < 2 )); then len=$(( len + 3 )); else len=$(( len + 2 )); fi
-      if (( i == idx )); then swatch "${cells[i]}" 1
-      elif (( i == chosen )); then swatch "${cells[i]}" 3
-      elif (( i == saved )); then swatch "${cells[i]}" 2
-      else swatch "${cells[i]}" 0
-      fi
+      if (( i == idx )); then swatch "${cells[i]}" 1; else swatch "${cells[i]}" 0; fi
       line+=$RET
       (( r < 2 )) && line+=" "
     done
@@ -3681,7 +3671,7 @@ field_rows() {
 # render_picker W H: the picker as rows in RP_TXT, at most W wide and, when
 # it has to, cut down to H rows around the field that has the focus.
 declare -a RP_TXT=() RP_OPT=() RP_W=() RP_LEN=()
-PK_CW=36 PK_SFG=-1 PK_SBG=-1 PK_FILE="" RP_FOCUS=0
+PK_CW=36 PK_FILE="" RP_FOCUS=0
 render_picker() {
   local w=$1 h=$2 ref=$PK_REF value title sec pad i r line len nw name names=(bold dim underline reverse blink) codes=(1 2 4 7 5)
   local -a keep=() keepw=()
@@ -3810,14 +3800,6 @@ picker_load() {
   else
     PK_ATTRS=$SGR_ATTRS PK_EXTRA=$SGR_EXTRA PK_PAD=$SGR_PAD PK_ZERO=$SGR_ZERO
     picker_cells "$SGR_FG" "$SGR_BG"
-  fi
-  # the colours that are in the file get a mark of their own
-  local i
-  PK_SFG=-1 PK_SBG=-1
-  sgr_parse "$PK_FILE"
-  if [[ -z $SGR_BAD ]]; then
-    for i in "${!FG_CELLS[@]}"; do [[ ${FG_CELLS[i]} == "$SGR_FG" ]] && PK_SFG=$i; done
-    for i in "${!BG_CELLS[@]}"; do [[ ${BG_CELLS[i]} == "$SGR_BG" ]] && PK_SBG=$i; done
   fi
 }
 
