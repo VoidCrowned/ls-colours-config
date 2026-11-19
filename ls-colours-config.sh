@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# ls_colours_config.sh - preview, check and edit a GNU dircolors configuration file.
+# ls-colours-config.sh - preview, check and edit a GNU dircolors configuration file.
 #
 # Needs bash 4.0 or newer and GNU coreutils (ls, dircolors). Nothing else.
 # Licence: WTFPL, see LICENSE.
 
 if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-  echo "ls_colours_config.sh needs bash 4.0 or newer (this is ${BASH_VERSION:-not bash})." >&2
+  echo "ls-colours-config.sh needs bash 4.0 or newer (this is ${BASH_VERSION:-not bash})." >&2
   echo "On macOS: brew install bash coreutils" >&2
   exit 1
 fi
@@ -14,7 +14,7 @@ fi
 shopt -s extglob
 
 VERSION=0.1.0
-PROG=ls_colours_config.sh
+PROG=ls-colours-config.sh
 
 # Special characters live in variables: bash 4.0 is picky about $'...' inside
 # quoted parameter expansions.

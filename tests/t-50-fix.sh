@@ -137,7 +137,7 @@ has "$(cat "$F")" "# video${NL}.mkv 31" "reorganise is written after confirmatio
 fixrun 'n\nn\nn\n\nn\n\ny\ny\n' --case-sensitive "$F"
 has "$OUT" "already in order" "a second run finds nothing to reorganise"
 run fix --help
-has "$OUT" "Usage: ls_colours_config.sh fix" "fix --help"
+has "$OUT" "Usage: ls-colours-config.sh fix" "fix --help"
 
 group "fix: the diff shows the entries in their colours"
 saved_colour=$OPT_COLOUR
