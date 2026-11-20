@@ -112,18 +112,16 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   }
   fresh pairs.dircolors
   before=$(cat "$F")
-  # Enter on .tar/.TAR, two colours to the right, choose, accept, save, confirm, back, quit
-  tui "$F" -- '\r' 'll' ' ' '\r' 's' 'y\n' '\n' 'q'
+  # Enter on .tar/.TAR, two colours to the right, choose, accept, save, confirm
+  tui "$F" -- '\r' 'll' ' ' '\r' 's' 'y\n'
   is "$(sed -n 2,3p "$F")" ".tar 33${NL}.TAR 33" "a case pair is edited together and saved"
   is "$(sed -e 2,3d "$F")" "$(printf '%s\n' "$before" | sed -e 2,3d)" "the other lines are untouched"
   count "$F".bak-*; is "$RET" 1 "a backup is written"
-  has "$OUT" "Press Enter to return to the editor, q or Escape to quit now." "after writing, Enter goes back and q or Esc quits"
-  fresh pairs.dircolors
-  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'y\n' 'q'
-  is "$RC|$(sed -n 2p "$F")" "0|.tar 32" "q after writing quits at once"
-  fresh pairs.dircolors
-  tui "$F" -- '\r' 'l' ' ' '\r' 's' 'y\n' '\033'
-  is "$RC|$(sed -n 2p "$F")" "0|.tar 32" "...and so does Escape"
+  is "$RC" 0 "after writing, the editor quits at once"
+  hasnt "$OUT" "Press Enter to return to the editor" "...without asking to go back to the editor"
+  has "$OUT" "Load the new colours with: eval" "...and the eval line stays on screen"
+  plain=$(printf '%s' "$OUT" | sed $'s/\e\\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+  has "$plain" "line(s) added.${NL}${NL}Write these changes" "an empty line stands between the diff and the question"
   fresh pairs.dircolors
   tui "$F" -- '\r' 'l' ' ' '\r' 's' 'n\n' 'q'
   has "$OUT" "q or Escape to quit without saving." "when nothing was written, the prompt says q loses the changes"
@@ -168,7 +166,7 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   # entry, k goes up to it), one colour to the right, accept, confirm
   # (the section was not of one colour), save
   fresh pairs.dircolors
-  tui "$F" -- 'k' '\r' 'l' ' ' '\r' 'y' 's' 'y\n' '\n' 'q'
+  tui "$F" -- 'k' '\r' 'l' ' ' '\r' 'y' 's' 'y\n'
   is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 32${NL}.GZ 32${NL}.zip 32" "a whole section gets one colour"
   fresh pairs.dircolors
   before=$(cat "$F")
@@ -178,13 +176,13 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
 
   # y on .tar, down, p on .gz/.GZ, down, d on .zip, save
   fresh pairs.dircolors
-  tui "$F" -- 'y' 'j' 'p' 'j' 'd' 's' 'y\n' '\n' 'q'
+  tui "$F" -- 'y' 'j' 'p' 'j' 'd' 's' 'y\n'
   is "$(sed -n 2,6p "$F")" ".tar 31${NL}.TAR 31${NL}.gz 31${NL}.GZ 31${NL}.zip 00" "y, p and d in the list are saved"
 
   # on the heading, one colour to the right without Space, Enter: the
   # chosen colour (red, most of the section) is given, not the cursor's
   fresh pairs.dircolors
-  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n' '\n' 'q'
+  tui "$F" -- 'k' '\r' 'l' '\r' 'y' 's' 'y\n'
   is "$(sed -n 5p "$F")" ".GZ 31" "Enter accepts the chosen colour, not the one under the cursor"
   has "$OUT" "Give all 3 entries of archives the colour red? 1 of them change." "...and the question names the chosen colour"
   fresh pairs.dircolors
@@ -194,10 +192,13 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   # palette view: up to the heading of red, one colour to the right (green),
   # accept, save
   fresh pairs.dircolors
-  tui "$F" -- 'v' 'k' '\r' 'l' ' ' '\r' 's' 'y\n' '\n' 'q'
+  tui "$F" -- 'v' 'k' '\r' 'l' ' ' '\r' 's' 'y\n'
   has "$OUT" "palette view" "v switches to the palette view"
-  is "$RC" 0 "...and q quits from there, as in the section view"
+  is "$RC" 0 "...and saving quits from there too"
   is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 31${NL}.GZ 32${NL}.zip 32" "...where Enter on a colour recolours every entry of that colour"
+  fresh pairs.dircolors
+  tui "$F" -- 'v' 'q'
+  is "$RC" 0 "q quits from the palette view, as in the section view"
 else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi
