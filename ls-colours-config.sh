@@ -2961,11 +2961,11 @@ setup_glyphs() {
   (( OPT_ASCII )) && utf=0
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▶" GL_OPEN="▾" GL_SHUT="▸"
-    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌"
+    GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" GL_ELL="…" PK_MARK="▐▌"
     GL_K_MOVE="↑↓" GL_K_ARROWS="←↑↓→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
-    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>"
+    GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" GL_ELL="..." PK_MARK="<>"
     GL_K_MOVE="up/down" GL_K_ARROWS="arrows" GL_K_LEFT="left" GL_K_RIGHT="right" GL_K_ENTER="Enter" GL_K_SPACE="Space"
   fi
 }
@@ -3087,38 +3087,101 @@ rule() {
   RET=${RET// /$GL_H}
 }
 
-# render_header W -> RET: tool and file, then the state, as one line.
-render_header() {
-  local w=$1 left right="" tail plain n=${#ST[@]} room i p sep=" $GL_DOT "
-  local -a parts=()
-  left=" $PROG$sep$FILE"
-  # the settings, least important first: on a narrow screen they go one by
-  # one, so that the view, a search and a dry run stay in sight longest
-  if (( OPT_256 )); then parts+=("256 colours"); else parts+=("16 colours"); fi
-  if (( OPT_CASE )); then parts+=("pairs apart"); else parts+=("pairs joined"); fi
-  [[ -n $T_FILTER ]] && parts+=("filtered")
-  (( OPT_DRY )) && parts+=("dry run")
-  parts+=("$T_VIEW view")
-  tail="$n unsaved"
-  # the palette and pairs settings go first, to make room for the whole file
-  # name; then the file name is cut, down to 20 characters; only then do a
-  # search, a dry run and the view go
-  for (( i = 0; i <= ${#parts[@]}; i++ )); do
-    right=""
-    for p in "${parts[@]:i}"; do right+="$p$sep"; done
-    (( i < 2 && ${#left} + ${#sep} + ${#right} + ${#tail} + 1 > w )) && continue
-    (( i >= 2 && 20 + ${#sep} + ${#right} + ${#tail} + 1 > w )) && continue
-    break
+# hdr_join ROW DROP -> RET: the header parts of ROW (or of both rows for -1)
+# that stay when every part that goes at DROP or earlier has gone, joined by
+# dots. Reads HP_NAME, HP_ROW and HP_GO of render_header.
+hdr_join() {
+  local k out=""
+  for k in "${!HP_NAME[@]}"; do
+    (( HP_GO[k] <= $2 )) && continue
+    (( $1 >= 0 && HP_ROW[k] != $1 )) && continue
+    out+="${out:+ $GL_DOT }${HP_NAME[k]}"
   done
-  plain="$sep$right$tail "
-  room=$(( w - ${#plain} ))
-  (( room < 0 )) && room=0
-  # short of room, the file name matters more than the name of the tool
-  (( ${#left} > room )) && left=" $FILE"
-  left=${left:0:room}
-  spaces "$(( w - ${#left} - ${#plain} ))"
-  if (( n )); then tail="${C_B}${C_Y}$tail${C_0}"; else tail="${C_D}$tail${C_0}"; fi
-  RET="${C_B}$left${C_0}${C_D}$sep$right${C_0}$tail $RET"
+  RET=$out
+}
+
+# render_header W -> HEAD_TXT, one entry per row, HEAD_H, the number of rows,
+# and RET, the rows joined by newlines. Where it fits, one row that reads like
+# the command, then the state:
+#   ls-colours-config.sh ~/.config/dircolors   ·   16 colours · pairs joined · section view · 0 unsaved
+# Otherwise two rows, the tool above the file, the state split between them:
+#   ls-colours-config.sh   ·   16 colours · 0 unsaved
+#   ~/.config/dircolors    ·   pairs joined · section view
+# Still short of room, the settings go (the palette, then the pairs), then
+# the file name is cut at the front, down to 20 characters; only then do a
+# search, a dry run and the view go. The count of unsaved changes always
+# stays; the rows are chosen as if it had three digits, so they do not
+# change while changes are made.
+declare -a HEAD_TXT=() HP_NAME=() HP_ROW=() HP_GO=()
+HEAD_H=1
+render_header() {
+  local w=$1 file=$FILE n=${#ST[@]} tail ctail tw drop room lw pad t1 t2 big="   $GL_DOT   "
+  # a file under the home folder as ~/...
+  [[ -n ${HOME:-} && $HOME != / && $file == "$HOME"/* ]] && file="~${file#"$HOME"}"
+  tail="$n unsaved"
+  tw=$(( ${#tail} + (${#n} < 3 ? 3 - ${#n} : 0) ))
+  if (( n )); then ctail="${C_B}${C_Y}$tail${C_0}"; else ctail="${C_D}$tail${C_0}"; fi
+  # the parts in the order of the one-row header, the row each takes in the
+  # two-row header, and when it goes (1 first)
+  HP_NAME=() HP_ROW=() HP_GO=()
+  if (( OPT_256 )); then HP_NAME+=("256 colours"); else HP_NAME+=("16 colours"); fi
+  HP_ROW+=(0) HP_GO+=(1)
+  if (( OPT_CASE )); then HP_NAME+=("pairs apart"); else HP_NAME+=("pairs joined"); fi
+  HP_ROW+=(1) HP_GO+=(2)
+  if [[ -n $T_FILTER ]]; then HP_NAME+=("filtered"); HP_ROW+=(1) HP_GO+=(3); fi
+  if (( OPT_DRY )); then HP_NAME+=("dry run"); HP_ROW+=(0) HP_GO+=(4); fi
+  HP_NAME+=("$T_VIEW view"); HP_ROW+=(1) HP_GO+=(5)
+
+  # one row, with everything; the last column stays empty
+  hdr_join -1 0
+  t1="$RET${RET:+ $GL_DOT }"
+  if (( 1 + ${#PROG} + 1 + ${#file} + ${#big} + ${#t1} + tw + 1 <= w )); then
+    HEAD_H=1
+    spaces "$(( w - 1 - ${#PROG} - 1 - ${#file} - ${#big} - ${#t1} - ${#tail} ))"
+    HEAD_TXT=(" ${C_B}$PROG $file${C_0}${C_D}$big$t1${C_0}$ctail$RET")
+    RET=${HEAD_TXT[0]}
+    return
+  fi
+
+  # two rows, the tool and the file padded to the same width (lw) so the
+  # dots line up; room is the widest lw that both rows allow
+  HEAD_H=2
+  for drop in 0 1 2 3 4 5; do
+    hdr_join 0 "$drop"; t1="$RET${RET:+ $GL_DOT }"
+    hdr_join 1 "$drop"; t2=$RET
+    room=$(( w - 2 - ${#big} - ${#t1} - tw ))
+    (( ${#t2} && w - 2 - ${#big} - ${#t2} < room )) && room=$(( w - 2 - ${#big} - ${#t2} ))
+    (( ${#PROG} > room )) && continue
+    (( ${#file} <= room )) && break
+    (( drop >= 2 && room >= 20 )) && break
+  done
+  (( room < 1 )) && room=1
+  if (( ${#file} > room )); then
+    # cut at the front: the name of the file matters most
+    if (( room > ${#GL_ELL} )); then file="$GL_ELL${file:$(( ${#file} - room + ${#GL_ELL} ))}"
+    else file=${file:$(( ${#file} - room ))}
+    fi
+  fi
+  lw=${#PROG}
+  (( ${#file} > lw )) && lw=${#file}
+  if (( 1 + lw + ${#big} + ${#t1} + ${#tail} + 1 <= w )); then
+    spaces "$(( lw - ${#PROG} ))"; pad=$RET
+    spaces "$(( w - 1 - lw - ${#big} - ${#t1} - ${#tail} ))"
+    HEAD_TXT=(" ${C_B}$PROG${C_0}$pad${C_D}$big$t1${C_0}$ctail$RET")
+  else
+    # too narrow for anything but the count
+    spaces "$(( w - 1 - ${#tail} - 1 ))"
+    HEAD_TXT=(" $ctail$RET ")
+  fi
+  spaces "$(( lw - ${#file} ))"; pad=$RET
+  if [[ -n $t2 ]] && (( 1 + lw + ${#big} + ${#t2} + 1 <= w )); then
+    spaces "$(( w - 1 - lw - ${#big} - ${#t2} ))"
+    HEAD_TXT+=(" ${C_B}$file${C_0}$pad${C_D}$big$t2${C_0}$RET")
+  else
+    spaces "$(( w - 1 - ${#file} ))"
+    HEAD_TXT+=(" ${C_B}$file${C_0}$RET")
+  fi
+  RET="${HEAD_TXT[0]}$NL${HEAD_TXT[1]}"
 }
 
 # render_footer W CONTEXT POSITION [MAX] -> FOOT_TXT, one entry per row, and
@@ -3379,7 +3442,8 @@ layout() {
 # position there can be (WIDEST; by default the one of a heading or of the
 # last entry) and, for a prompt, from the hints of the list or picker behind
 # it, so the list keeps its height while the cursor moves or a prompt is
-# open. Sets MSG_ROW, the message row just above the hints, and LIST_H, the
+# open. Needs render_header to have run for HEAD_H. Sets MSG_ROW, the
+# message row just above the hints, and LIST_H, the
 # rows left between the two rules.
 MSG_ROW=$(( ${ROWS:-24} - 1 )) LIST_H=1
 footer_rows() {
@@ -3398,16 +3462,26 @@ footer_rows() {
   render_footer "$1" "$2" "$3" "$n"
   while (( ${#FOOT_TXT[@]} < n )); do FOOT_TXT+=(""); done
   MSG_ROW=$(( ROWS - n ))
-  LIST_H=$(( ROWS - 4 - n ))
+  LIST_H=$(( ROWS - HEAD_H - 3 - n ))
   (( LIST_H < 1 )) && LIST_H=1
 }
 
+# head_buf -> RET: the header rows and the rule below them, as frame text,
+# with the rule given as RULE. The panes start on row HEAD_H + 2.
+head_buf() {
+  local r out=""
+  for (( r = 0; r < HEAD_H; r++ )); do out+="${ROW_AT}$(( r + 1 ))${ROW_TXT}${HEAD_TXT[r]}"; done
+  RET="$out${ROW_AT}$(( HEAD_H + 1 ))${ROW_TXT}$1"
+}
+
 # compose_frame -> RET: the whole screen as frame text for emit_frame.
-# Row 1 header, row 2 a rule, then the panes, a rule, the message row and
-# the key hints (one row or more).
+# The header (one row or two), a rule, then the panes, a rule, the message
+# row and the key hints (one row or more).
 compose_frame() {
-  local buf r h pos="" lw rw lrule rrule line foot
+  local buf r h pos="" lw rw lrule rrule line foot top
   layout
+  render_header "$COLS"
+  top=$(( HEAD_H + 2 ))
   case ${ROW_KIND[T_CUR]:-} in
     e) cur_entry; pos="${E_ORD[RET]}/$T_TOTAL" ;;
     h) pos="$T_TOTAL entries" ;;
@@ -3433,8 +3507,7 @@ compose_frame() {
     RET=$buf
     return
   fi
-  render_header "$COLS"
-  buf="${ROW_AT}1${ROW_TXT}$RET"
+  buf=""
   case $T_LAYOUT in
     split)
       lw=$(( COLS - PANE_R - 1 ))
@@ -3452,23 +3525,23 @@ compose_frame() {
       rule "$lw"; lrule="${C_D}$RET${C_0}"
       # the rules run on to the edge of the screen when the panes end earlier
       rule "$(( COLS - lw - 1 ))"; rrule="${C_D}$RET${C_0}"
-      buf+="${ROW_AT}2${ROW_TXT}$lrule${C_D}$GL_TEE${C_0}$rrule"
+      head_buf "$lrule${C_D}$GL_TEE${C_0}$rrule"; buf+=$RET
       for (( r = 0; r < h; r++ )); do
         spaces "$(( lw - LP_LEN[r] ))"
-        buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}${C_0}$RET${C_D}$GL_V${C_0}${RP_TXT[r]:-}"
+        buf+="${ROW_AT}$(( r + top ))${ROW_TXT}${LP_TXT[r]}${C_0}$RET${C_D}$GL_V${C_0}${RP_TXT[r]:-}"
       done
       buf+="${ROW_AT}${foot}${ROW_TXT}$lrule${C_D}$GL_FOOT${C_0}$rrule" ;;
     full)
       rule "$COLS"; line="${C_D}$RET${C_0}"
-      buf+="${ROW_AT}2${ROW_TXT}$line"
+      head_buf "$line"; buf+=$RET
       render_picker "$COLS" "$h"
-      for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${RP_TXT[r]:-}"; done
+      for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + top ))${ROW_TXT}${RP_TXT[r]:-}"; done
       buf+="${ROW_AT}${foot}${ROW_TXT}$line" ;;
     *)
       rule "$COLS"; line="${C_D}$RET${C_0}"
-      buf+="${ROW_AT}2${ROW_TXT}$line"
+      head_buf "$line"; buf+=$RET
       render_list "$COLS" "$h"
-      for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}"; done
+      for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + top ))${ROW_TXT}${LP_TXT[r]}"; done
       buf+="${ROW_AT}${foot}${ROW_TXT}$line" ;;
   esac
   info_line "$COLS"
@@ -4361,18 +4434,18 @@ show_help() {
   T_CTX=help
   while :; do
     # the rows the hints take, with a position as wide as it can get
+    render_header "$COLS"
     footer_rows "$COLS" help "" "$n-$n/$n"
     h=$LIST_H
     (( top > n - h )) && top=$(( n - h ))
     (( top < 0 )) && top=0
-    render_header "$COLS"
-    buf="${ROW_AT}1${ROW_TXT}$RET"
     rule "$COLS"
     line="${C_D}$RET${C_0}"
-    buf+="${ROW_AT}2${ROW_TXT}$line${ROW_AT}$(( MSG_ROW - 1 ))${ROW_TXT}$line${ROW_AT}${MSG_ROW}${ROW_TXT}"
+    head_buf "$line"
+    buf="$RET${ROW_AT}$(( MSG_ROW - 1 ))${ROW_TXT}$line${ROW_AT}${MSG_ROW}${ROW_TXT}"
     for (( y = 0; y < h; y++ )); do
       i=$(( top + y ))
-      buf+="${ROW_AT}$(( y + 3 ))${ROW_TXT}"
+      buf+="${ROW_AT}$(( y + HEAD_H + 2 ))${ROW_TXT}"
       (( i < n )) && buf+="  ${HELP_ROWS[i]:0:$(( COLS - 2 > 0 ? COLS - 2 : 0 ))}"
     done
     if (( n > h )); then line="$(( top + 1 ))-$(( top + h < n ? top + h : n ))/$n"; else line=""; fi
@@ -4449,6 +4522,7 @@ cmd_edit() {
   term_size
   build_groups
   # a file that does not fit on one screen starts as a list of its sections
+  render_header "$COLS"
   footer_rows "$COLS" list ""
   (( ${#E_LABEL[@]} + ${#G_TITLE[@]} > LIST_H )) && T_FOLD_DEFAULT=1
   CUR_ID=""

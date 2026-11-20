@@ -113,20 +113,25 @@ has "$RET" "3   31  (1 differ)" "x shows the code in the summary too"
 render_state
 
 group "edit: header and key hints"
+plain render_header 100
+is "$HEAD_H|$RET" "1|$(printf '%-100s' " ls-colours-config.sh pairs.dircolors   -   16 colours - pairs joined - section view - 0 unsaved")" "a wide header is one row that reads like the command, then the state"
 plain render_header 70
-is "$RET" " ls-colours-config.sh - pairs.dircolors - section view - 0 unsaved    " "a narrow header keeps the file name and the view"
-plain render_header 120
-is "$RET" " ls-colours-config.sh - pairs.dircolors - 16 colours - pairs joined - section view - 0 unsaved                          " "a wide header shows the settings, straight after the file name"
-plain render_header 90
-is "$RET" " ls-colours-config.sh - pairs.dircolors - pairs joined - section view - 0 unsaved         " "...dropping the least important first"
+is "$HEAD_H|$RET" "2|$(printf '%-70s\n%-70s' " ls-colours-config.sh   -   16 colours - 0 unsaved" " pairs.dircolors        -   pairs joined - section view")" "a narrower one has two rows, the tool above the file, the dots lined up"
+plain render_header 44
+is "$RET" "$(printf '%-44s\n%-44s' " ls-colours-config.sh   -   0 unsaved" " pairs.dircolors        -   section view")" "...dropping the settings first"
 OPT_DRY=1 FILE=/a/rather/long/path/to/the/dircolors/file
 plain render_header 60
-is "$RET" " /a/rather/long/path/t - dry run - section view - 0 unsaved " "a dry run and the view stay; the tool's name goes and a long file name is cut"
-OPT_DRY=0 FILE=pairs.dircolors
+is "$RET" "$(printf '%-60s\n%-60s' " ls-colours-config.sh             -   dry run - 0 unsaved" " .../path/to/the/dircolors/file   -   section view")" "a dry run and the view stay; a long file name is cut at the front"
+OPT_DRY=0 FILE=$HOME/.config/dircolors
+plain render_header 120
+has "$RET" " ls-colours-config.sh ~/.config/dircolors " "a file in the home folder is shown as ~/..."
+FILE=pairs.dircolors
 ST[2]=33
-plain render_header 90
+plain render_header 100
 has "$RET" "1 unsaved" "the header counts staged changes"
-is "${#RET}" 90 "...and fills the width exactly"
+is "${#RET}" 100 "...and fills the width exactly"
+plain render_header 97
+is "$HEAD_H" 2 "...and takes two rows where 100 unsaved changes would not fit on one"
 ST=()
 plain render_footer 60 list 1/5
 is "$RET" " ? help   arrows move   / search                        1/5 " "on one row, the groups that do not fit are left out; the position is on the right"
@@ -163,12 +168,11 @@ has "$RET" "Esc cancel" "...and so has the search"
 group "edit: the whole screen"
 COLS=60 ROWS=12
 frame_text
-is "$RET" " pairs.dircolors - section view - 0 unsaved                 
+is "$RET" "$(printf '%-60s\n%-60s' " ls-colours-config.sh   -   16 colours - 0 unsaved" " pairs.dircolors        -   pairs joined - section view")
 ------------------------------------------------------------
  - archives     3   red  (1 differ)
 >    example.tar       .tar / .TAR     red
      example.gz        .gz / .GZ       red | green  differs
-     example.zip       .zip            red
 ------------------------------------------------------------
 
  ? help   arrows move   / search                        1/5 
