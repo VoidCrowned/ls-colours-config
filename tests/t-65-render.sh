@@ -64,7 +64,22 @@ list_text 60 3
 is "$RET" " - archives     3   33  (2 differ)
 >    example.tar       .tar / .TAR     * -> 33
      example.gz        .gz / .GZ       31 | 32  differs" "x shows the codes instead"
-T_RAW=0 ST=()
+T_RAW=0
+# with colours, a row that is cut keeps its yellow mark (as with the picker open)
+cut_row() {
+  local C_B="" C_Y="<Y>" C_D="<D>" C_0="</>"
+  entry_values "$1"; row_text "$1" "$2"
+}
+cut_row 0 6
+is "$RET|$RET2" "<Y>*</> <D>-></> y|6" "a changed row that is cut keeps its yellow mark, in the section view"
+T_VIEW=palette
+cut_row 0 5
+is "$RET|$RET2" "<Y>*</> <D>arc</>|5" "...and in the palette view"
+T_VIEW=section ST=()
+cut_row 1 10
+is "$RET|$RET2" "<D>red | gree</>|10" "an unchanged row is cut as before"
+cut_row 1 14
+is "$RET" "<D>red | green</><Y>  d</>" "...and 'differs' stays yellow when cut"
 ST[6]=30
 list_text 60 4
 has "$RET" "     example.zip exam  .zip            * -> black" "a name that is hard to read is repeated in plain text"

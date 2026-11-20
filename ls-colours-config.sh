@@ -3275,29 +3275,36 @@ render_footer() {
 # row_text REF LIMIT -> RET text, RET2 its width: what stands behind the
 # pattern of an entry. Needs entry_values to have run for the entry.
 row_text() {
-  local limit=$2 v plain="" out=""
+  local limit=$2 v pre_p="" pre_o="" body="" bc="" tail_p="" r b t
   (( limit < 0 )) && limit=0
   if [[ $T_VIEW == palette ]]; then
     # the group says the colour; the row says where the entry lives
-    plain=${E_SEC[$1]} out="${C_D}$plain${C_0}"
-    if (( EV_MOD )); then plain="* $plain" out="${C_B}${C_Y}*${C_0} $out"; fi
+    body=${E_SEC[$1]} bc=$C_D
+    (( EV_MOD )) && pre_p="* " pre_o="${C_B}${C_Y}*${C_0} "
   elif (( EV_MOD )); then
-    if (( T_RAW )); then RET=$EV_EFF; else describe_value "$EV_EFF"; fi
-    plain="* $GL_TO $RET"
-    out="${C_B}${C_Y}*${C_0} ${C_D}$GL_TO${C_0} $RET"
+    if (( T_RAW )); then body=$EV_EFF; else describe_value "$EV_EFF"; body=$RET; fi
+    pre_p="* $GL_TO " pre_o="${C_B}${C_Y}*${C_0} ${C_D}$GL_TO${C_0} "
   else
     for v in "${EV_LIST[@]}"; do
       if (( T_RAW )); then RET=$v; else describe_value "$v"; fi
-      plain+="${plain:+ | }$RET"
+      body+="${body:+ | }$RET"
     done
-    out="${C_D}$plain${C_0}"
-    if (( ${#EV_LIST[@]} > 1 )); then plain+="  differs" out+="  ${C_Y}differs${C_0}"; fi
+    bc=$C_D
+    (( ${#EV_LIST[@]} > 1 )) && tail_p="  differs"
   fi
-  if (( ${#plain} > limit )); then
-    plain=${plain:0:limit}
-    out="${C_D}$plain${C_0}"
+  # cut to LIMIT from the end; every part keeps its colour, so a change
+  # stays marked also in a narrow pane (with the picker open)
+  if (( ${#pre_p} > limit )); then
+    RET="${C_B}${C_Y}${pre_p:0:limit}${C_0}" RET2=$limit
+    return
   fi
-  RET=$out RET2=${#plain}
+  r=$(( limit - ${#pre_p} ))
+  b=${body:0:r}
+  t=${tail_p:0:$(( r - ${#b} ))}
+  RET=$pre_o
+  if [[ -n $bc ]]; then RET+="$bc$b${C_0}"; else RET+=$b; fi
+  [[ -n $t ]] && RET+="${C_Y}$t${C_0}"
+  RET2=$(( ${#pre_p} + ${#b} + ${#t} ))
 }
 
 # render_list W H: the list as H rows of at most W characters, in LP_TXT,
