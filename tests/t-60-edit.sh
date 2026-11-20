@@ -194,9 +194,9 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   # palette view: up to the heading of red, one colour to the right (green),
   # accept, save
   fresh pairs.dircolors
-  tui "$F" -- 'v' 'k' '\r' 'l' ' ' '\r' 's' 'y\n' '\n' 'q' 'q'
+  tui "$F" -- 'v' 'k' '\r' 'l' ' ' '\r' 's' 'y\n' '\n' 'q'
   has "$OUT" "palette view" "v switches to the palette view"
-  is "$RC" 0 "...the first q leaves it, the second quits"
+  is "$RC" 0 "...and q quits from there, as in the section view"
   is "$(sed -n 2,6p "$F")" ".tar 32${NL}.TAR 32${NL}.gz 31${NL}.GZ 32${NL}.zip 32" "...where Enter on a colour recolours every entry of that colour"
 else
   skip "editor in a pseudo-terminal" "needs the script command"

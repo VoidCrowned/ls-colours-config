@@ -3202,10 +3202,8 @@ render_footer() {
                    "$GL_K_SPACE|choose" "$GL_K_ENTER|accept" "r|reset" "e|type code" "Esc/q|cancel") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
-    *)      l="q|quit"
-            [[ $T_VIEW == palette ]] && l="Esc/q|section view"
-            hints=("?|help" "$GL_K_ARROWS|move" "/|search" "+"
-                   "$GL_K_ENTER|edit" "s|save" "$l" ""
+    *)      hints=("?|help" "$GL_K_ARROWS|move" "/|search" "+"
+                   "$GL_K_ENTER|edit" "s|save" "q|quit" ""
                    "y|copy" "p|paste" "d|clear" "u|undo" "U|undo all" "+"
                    "v|view" "x|codes" "$GL_K_SPACE|fold" "z|fold all" "Z|unfold all" "c|case pairs") ;;
   esac
@@ -4382,7 +4380,6 @@ help_lines() {
   hk "v" "section view, or palette view: the entries grouped by colour"
   hk "z / Z" "fold every section / unfold every section"
   hk "/" "search (pattern, sample name or section); Esc clears"
-  hk "Esc, q" "leave the palette view (q quits only in the section view)"
   hk "x" "show the codes instead of the colours in words"
   hk "c" "join or separate case pairs such as .deb / .DEB"
   hk "u" "undo the changes of the entry under the cursor (on a heading: of all its entries)"
@@ -4597,10 +4594,8 @@ cmd_edit() {
           (( ${#ROW_KIND[@]} )) || T_MSG="No entry matches \"$T_FILTER\". Esc clears the filter."
         fi ;;
       esc)
-        # first the search goes, then the palette view
-        if [[ -n $T_FILTER ]]; then T_FILTER=""; build_rows
-        elif [[ $T_VIEW == palette ]]; then T_VIEW=section; build_rows
-        fi ;;
+        # v switches the view; Esc only clears the search
+        if [[ -n $T_FILTER ]]; then T_FILTER=""; build_rows; fi ;;
       c)
         if (( OPT_CASE )); then OPT_CASE=0; else OPT_CASE=1; fi
         build_entries
@@ -4615,13 +4610,6 @@ cmd_edit() {
       s) save_staged; (( EDIT_DONE )) && break ;;
       \?) show_help ;;
       q|quit|eof)
-        # q leaves the palette view first
-        if [[ $KEY == q && $T_VIEW == palette ]]; then
-          T_VIEW=section
-          build_rows
-          draw_screen
-          continue
-        fi
         # q and Ctrl-C ask when there are unsaved changes; Ctrl-C once
         # more at the question quits
         INTR=0
