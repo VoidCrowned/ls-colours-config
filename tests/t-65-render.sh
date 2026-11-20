@@ -64,7 +64,22 @@ list_text 60 3
 is "$RET" " - archives     3   33  (2 differ)
 >    example.tar       .tar / .TAR     * -> 33
      example.gz        .gz / .GZ       31 | 32  differs" "x shows the codes instead"
-T_RAW=0 ST=()
+T_RAW=0
+# with colours, a row that is cut keeps its yellow mark (as with the picker open)
+cut_row() {
+  local C_B="" C_Y="<Y>" C_D="<D>" C_0="</>"
+  entry_values "$1"; row_text "$1" "$2"
+}
+cut_row 0 6
+is "$RET|$RET2" "<Y>*</> <D>-></> y|6" "a changed row that is cut keeps its yellow mark, in the section view"
+T_VIEW=palette
+cut_row 0 5
+is "$RET|$RET2" "<Y>*</> <D>arc</>|5" "...and in the palette view"
+T_VIEW=section ST=()
+cut_row 1 10
+is "$RET|$RET2" "<D>red | gree</>|10" "an unchanged row is cut as before"
+cut_row 1 14
+is "$RET" "<D>red | green</><Y>  d</>" "...and 'differs' stays yellow when cut"
 ST[6]=30
 list_text 60 4
 has "$RET" "     example.zip exam  .zip            * -> black" "a name that is hard to read is repeated in plain text"
@@ -113,23 +128,53 @@ has "$RET" "3   31  (1 differ)" "x shows the code in the summary too"
 render_state
 
 group "edit: header and key hints"
+plain render_header 100
+is "$HEAD_H|$RET" "1|$(printf '%-100s' " ls-colours-config.sh pairs.dircolors   -   16 colours - pairs joined - section view - 0 unsaved")" "a wide header is one row that reads like the command, then the state"
 plain render_header 70
-is "$RET" " ls-colours-config.sh - pairs.dircolors - section view - 0 unsaved    " "a narrow header keeps the file name and the view"
-plain render_header 120
-is "$RET" " ls-colours-config.sh - pairs.dircolors - 16 colours - pairs joined - section view - 0 unsaved                          " "a wide header shows the settings, straight after the file name"
-plain render_header 90
-is "$RET" " ls-colours-config.sh - pairs.dircolors - pairs joined - section view - 0 unsaved         " "...dropping the least important first"
+is "$HEAD_H|$RET" "2|$(printf '%-70s\n%-70s' " ls-colours-config.sh   -   16 colours - 0 unsaved" " pairs.dircolors        -   pairs joined - section view")" "a narrower one has two rows, the tool above the file, the dots lined up"
+plain render_header 44
+is "$RET" "$(printf '%-44s\n%-44s' " ls-colours-config.sh   -   0 unsaved" " pairs.dircolors        -   section view")" "...dropping the settings first"
 OPT_DRY=1 FILE=/a/rather/long/path/to/the/dircolors/file
 plain render_header 60
-is "$RET" " /a/rather/long/path/t - dry run - section view - 0 unsaved " "a dry run and the view stay; the tool's name goes and a long file name is cut"
-OPT_DRY=0 FILE=pairs.dircolors
+is "$RET" "$(printf '%-60s\n%-60s' " ls-colours-config.sh             -   dry run - 0 unsaved" " .../path/to/the/dircolors/file   -   section view")" "a dry run and the view stay; a long file name is cut at the front"
+OPT_DRY=0 FILE=$HOME/.config/dircolors
+plain render_header 120
+has "$RET" " ls-colours-config.sh ~/.config/dircolors " "a file in the home folder is shown as ~/..."
+FILE=pairs.dircolors
 ST[2]=33
-plain render_header 90
+plain render_header 100
 has "$RET" "1 unsaved" "the header counts staged changes"
-is "${#RET}" 90 "...and fills the width exactly"
+is "${#RET}" 100 "...and fills the width exactly"
+plain render_header 97
+is "$HEAD_H" 2 "...and takes two rows where 100 unsaved changes would not fit on one"
 ST=()
 plain render_footer 60 list 1/5
-is "$RET" " up/down move   Enter edit   Space fold   ? help        1/5 " "hints that do not fit are left out; the position is on the right"
+is "$RET" " ? help   arrows move   / search                        1/5 " "on one row, the groups that do not fit are left out; the position is on the right"
+plain render_footer 120 list 1/5 4
+is "$RET" "$(printf '%-116s1/5 \n%-120s\n%-120s' " ? help   arrows move   / search" \
+  " Enter edit   s save   q quit   -   y copy   p paste   d clear   u undo   U undo all" \
+  " v view   x codes   Space fold   z fold all   Z unfold all   c case pairs")" "the list has three rows of hints, even when wide; groups on one row are split by a dot"
+plain render_footer 120 picker "" 4
+is "$RET" "$(printf '%-120s' " ? help   arrows move   Tab next field   -   Space choose   Enter accept   r reset   e type code   Esc/q cancel")" "the picker has two groups on one row"
+plain render_footer 80 list "" 4
+is "${FOOT_TXT[1]}|${#FOOT_TXT[@]}" "$(printf '%-80s' " Enter edit   s save   q quit")|4" "a group that does not fit moves to the next row"
+plain render_footer 40 list "" 9
+is "${FOOT_TXT[2]}|${FOOT_TXT[3]}" " y copy   p paste   d clear   u undo    | U undo all                             " "a group wider than a row is split between its keys"
+plain render_footer 60 list 1/5 2
+is "${#FOOT_TXT[@]}" 2 "...and the hints never take more rows than allowed"
+old_total=$T_TOTAL
+ROWS=40 T_TOTAL=120
+heights=""
+for w in 100 106 110 114 116 118 120 130; do
+  footer_rows "$w" list "120 entries"; a=$LIST_H
+  footer_rows "$w" list "9/120"; b=$LIST_H
+  footer_rows "$w" prompt "9/120"; heights+="$a$b$LIST_H "
+  [[ $a == "$b" && $b == "$LIST_H" ]] || heights+="(differs at $w) "
+done
+if [[ $heights != *differs* ]]; then pass "the list keeps its height on a heading, on an entry and while a prompt is open"
+else fail "the list keeps its height on a heading, on an entry and while a prompt is open" "$heights"
+fi
+ROWS=12 T_TOTAL=$old_total
 plain render_footer 60 picker ""
 has "$RET" "Tab next field" "the picker has hints of its own"
 plain render_footer 60 prompt ""
@@ -138,18 +183,17 @@ has "$RET" "Esc cancel" "...and so has the search"
 group "edit: the whole screen"
 COLS=60 ROWS=12
 frame_text
-is "$RET" " pairs.dircolors - section view - 0 unsaved                 
+is "$RET" "$(printf '%-60s\n%-60s' " ls-colours-config.sh   -   16 colours - 0 unsaved" " pairs.dircolors        -   pairs joined - section view")
 ------------------------------------------------------------
  - archives     3   red  (1 differ)
 >    example.tar       .tar / .TAR     red
      example.gz        .gz / .GZ       red | green  differs
-     example.zip       .zip            red
- - images       2   magenta
-     example.png       .png / .PNG     magenta
-     example.jpg       .jpg            magenta
 ------------------------------------------------------------
 
- up/down move   Enter edit   Space fold   ? help        1/5 " "header, rule, list, rule, message row, key hints"
+ ? help   arrows move   / search                        1/5 
+ Enter edit   s save   q quit                               
+ y copy   p paste   d clear   u undo   U undo all           
+ v view   x codes   Space fold   z fold all   Z unfold all  " "header, rule, list, rule, message row, key hints; the hints take at most half the rows"
 T_FILTER=png CUR_ID=""; build_rows
 frame_text
 has "$RET" " filter: png  (Esc clears)" "an active filter is shown above the hints"
@@ -205,7 +249,7 @@ frame=$RET
 widest "$frame"
 is "$RET" 100 "split: no row is wider than the terminal"
 RET=$frame; columns_at 56
-is "${RET:1:21}" "+|||||||||||||||||||+" "split: the panes are divided by one straight line"
+is "${RET:1:20}" "+||||||||||||||||||+" "split: the panes are divided by one straight line"
 has "$frame" "|  .tar / .TAR" "split: the picker is on the right"
 has "$frame" ">    example.tar" "split: the list stays on the left"
 has "$frame" "Foreground   red" "split: the colour under the cursor is named next to the field"
