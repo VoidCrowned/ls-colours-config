@@ -3123,33 +3123,35 @@ render_header() {
 
 # render_footer W CONTEXT POSITION [MAX] -> FOOT_TXT, one entry per row, and
 # RET, the rows joined by newlines: the keys that work right now, the key
-# bright and its meaning dim, in groups split by a dim dot. A group that does
-# not fit on the row moves to the next one, so the hints take up to MAX rows
-# (default 1); a group wider than a whole row is split between its keys, and
-# what does not fit into MAX rows is left out. The position in the list
-# stands on the right of the first row.
+# bright and its meaning dim, in groups split by a dim dot. A bar may start a
+# new row at a set place; besides, a group that does not fit on the row moves
+# to the next one, so the hints take up to MAX rows (default 1). A group
+# wider than a whole row is split between its keys, and what does not fit
+# into MAX rows is left out. The position in the list stands on the right of
+# the first row.
 declare -a FOOT_TXT=()
 render_footer() {
-  local w=$1 pos=$3 max=${4:-1} h k l r=0 i n glen room full=0
+  local w=$1 pos=$3 max=${4:-1} h k l r=0 i n glen room gap full=0
   local -a hints=() gt=() gl=() rt=(" ") rl=(1)
-  # an empty entry ends a group
+  # an empty entry ends a group; "+" ends it and starts a new row
   case $2 in
     picker) hints=("?|help" "$GL_K_ARROWS|move" "Tab|next field" ""
-                   "$GL_K_SPACE|choose" "$GL_K_ENTER|accept" "Esc/q|cancel" ""
-                   "e|type a code" "r|reset") ;;
+                   "$GL_K_SPACE|choose" "$GL_K_ENTER|accept" "r|reset" "e|type code" "Esc/q|cancel") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
     *)      l="q|quit"
             [[ $T_VIEW == palette ]] && l="Esc/q|section view"
-            hints=("?|help" "$GL_K_ARROWS|move" "/|search" ""
+            hints=("?|help" "$GL_K_ARROWS|move" "/|search" "+"
                    "$GL_K_ENTER|edit" "s|save" "$l" ""
-                   "y|copy" "p|paste" "d|clear" "u|undo" "U|undo all" ""
+                   "y|copy" "p|paste" "d|clear" "u|undo" "U|undo all" "+"
                    "v|view" "x|codes" "$GL_K_SPACE|fold" "z|fold all" "Z|unfold all" "c|case pairs") ;;
   esac
   hints+=("")
   (( ${#pos} + 1 > w )) && pos=""
+  # the room on row r: the first row leaves room for the position
+  room=$(( w - 1 - (${#pos} ? ${#pos} + 1 : 0) ))
   for h in "${hints[@]}"; do
-    if [[ -n $h ]]; then
+    if [[ -n $h && $h != + ]]; then
       k=${h%%|*} l=${h#*|}
       gl+=("$(( ${#k} + 1 + ${#l} ))")
       # a slash between two keys (Esc/q) is dim, like the meaning
@@ -3158,34 +3160,39 @@ render_footer() {
       continue
     fi
     n=${#gt[@]}
-    (( n )) || continue
-    glen=$(( (n - 1) * 3 ))
-    for i in "${gl[@]}"; do glen=$(( glen + i )); done
-    # the room on row r: the first row leaves room for the position
-    room=$(( w - 1 - (r == 0 && ${#pos} ? ${#pos} + 1 : 0) ))
-    if (( rl[r] > 1 && rl[r] + 3 + glen > room )); then
-      # the group does not fit after the others: it starts a row of its own
-      if (( r + 1 >= max )); then break; fi
-      r=$(( r + 1 )); rt[r]=" " rl[r]=1
-      room=$(( w - 1 ))
+    if (( n )); then
+      # three spaces between the keys of a group, the dot and three more
+      # on either side between two groups
+      glen=$(( (n - 1) * 3 ))
+      for i in "${gl[@]}"; do glen=$(( glen + i )); done
+      if (( rl[r] > 1 && rl[r] + 7 + glen > room )); then
+        # the group does not fit after the others: it starts a row of its own
+        if (( r + 1 >= max )); then break; fi
+        r=$(( r + 1 )); rt[r]=" " rl[r]=1 room=$(( w - 1 ))
+      fi
+      for (( i = 0; i < n; i++ )); do
+        gap=3
+        (( i )) || gap=7
+        if (( rl[r] > 1 && rl[r] + gap + gl[i] > room )); then
+          if (( r + 1 >= max )); then full=1; break; fi
+          r=$(( r + 1 )); rt[r]=" " rl[r]=1 room=$(( w - 1 ))
+        fi
+        # a key wider than a whole row is left out
+        (( rl[r] + gl[i] > room )) && continue
+        if (( rl[r] > 1 )); then
+          if (( i )); then rt[r]+="   "; else rt[r]+="   ${C_D}$GL_DOT${C_0}   "; fi
+          rl[r]=$(( rl[r] + gap ))
+        fi
+        rt[r]+=${gt[i]}
+        rl[r]=$(( rl[r] + gl[i] ))
+      done
+      (( full )) && break
+      gt=() gl=()
     fi
-    for (( i = 0; i < n; i++ )); do
-      if (( rl[r] > 1 && rl[r] + 3 + gl[i] > room )); then
-        if (( r + 1 >= max )); then full=1; break; fi
-        r=$(( r + 1 )); rt[r]=" " rl[r]=1
-        room=$(( w - 1 ))
-      fi
-      # a key wider than a whole row is left out
-      (( rl[r] + gl[i] > room )) && continue
-      if (( rl[r] > 1 )); then
-        if (( i )); then rt[r]+="   "; else rt[r]+=" ${C_D}$GL_DOT${C_0} "; fi
-        rl[r]=$(( rl[r] + 3 ))
-      fi
-      rt[r]+=${gt[i]}
-      rl[r]=$(( rl[r] + gl[i] ))
-    done
-    (( full )) && break
-    gt=() gl=()
+    if [[ $h == + ]] && (( rl[r] > 1 )); then
+      if (( r + 1 >= max )); then break; fi
+      r=$(( r + 1 )); rt[r]=" " rl[r]=1 room=$(( w - 1 ))
+    fi
   done
   FOOT_TXT=()
   RET=""

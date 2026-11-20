@@ -130,9 +130,14 @@ is "${#RET}" 90 "...and fills the width exactly"
 ST=()
 plain render_footer 60 list 1/5
 is "$RET" " ? help   arrows move   / search                        1/5 " "on one row, the groups that do not fit are left out; the position is on the right"
-plain render_footer 120 list 1/5 3
-is "$RET" " ? help   arrows move   / search - Enter edit   s save   q quit - y copy   p paste   d clear   u undo   U undo all  1/5 
- v view   x codes   Space fold   z fold all   Z unfold all   c case pairs                                               " "groups are split by a dot; a group that does not fit moves to the next row"
+plain render_footer 120 list 1/5 4
+is "$RET" "$(printf '%-116s1/5 \n%-120s\n%-120s' " ? help   arrows move   / search" \
+  " Enter edit   s save   q quit   -   y copy   p paste   d clear   u undo   U undo all" \
+  " v view   x codes   Space fold   z fold all   Z unfold all   c case pairs")" "the list has three rows of hints, even when wide; groups on one row are split by a dot"
+plain render_footer 120 picker "" 4
+is "$RET" "$(printf '%-120s' " ? help   arrows move   Tab next field   -   Space choose   Enter accept   r reset   e type code   Esc/q cancel")" "the picker has two groups on one row"
+plain render_footer 80 list "" 4
+is "${FOOT_TXT[1]}|${#FOOT_TXT[@]}" "$(printf '%-80s' " Enter edit   s save   q quit")|4" "a group that does not fit moves to the next row"
 plain render_footer 40 list "" 9
 is "${FOOT_TXT[2]}|${FOOT_TXT[3]}" " y copy   p paste   d clear   u undo    | U undo all                             " "a group wider than a row is split between its keys"
 plain render_footer 60 list 1/5 2
