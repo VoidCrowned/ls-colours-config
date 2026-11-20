@@ -2640,9 +2640,9 @@ read_key() {
 # Returns 1 when cancelled with Esc.
 line_input() {
   local text=$2
-  unset "FRAME[$(( ROWS - 1 ))]"
+  unset "FRAME[$MSG_ROW]"
   while :; do
-    printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K${C_B}$1${C_0}${text}${ESC}[?25h"
+    printf '%s' "${ESC}[${MSG_ROW};1H${ESC}[K${C_B}$1${C_0}${text}${ESC}[?25h"
     if ! read_key 0.5; then
       if (( ! INTR )); then continue; fi
       KEY=esc
@@ -2962,7 +2962,7 @@ setup_glyphs() {
   if (( utf )); then
     GL_H="─" GL_V="│" GL_TEE="┬" GL_FOOT="┴" GL_CUR="▶" GL_OPEN="▾" GL_SHUT="▸"
     GL_SW="██" GL_WARN="!" GL_DOT="·" GL_TO="→" PK_MARK="▐▌"
-    GL_K_MOVE="↑↓" GL_K_ARROWS="↑↓←→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
+    GL_K_MOVE="↑↓" GL_K_ARROWS="←↑↓→" GL_K_LEFT="←" GL_K_RIGHT="→" GL_K_ENTER="⏎" GL_K_SPACE="␣"
   else
     GL_H="-" GL_V="|" GL_TEE="+" GL_FOOT="+" GL_CUR=">" GL_OPEN="-" GL_SHUT="+"
     GL_SW="##" GL_WARN="!" GL_DOT="-" GL_TO="->" PK_MARK="<>"
@@ -3121,35 +3121,85 @@ render_header() {
   RET="${C_B}$left${C_0}${C_D}$sep$right${C_0}$tail $RET"
 }
 
-# render_footer W CONTEXT POSITION -> RET: the keys that work right now, the
-# key bright and its meaning dim, and the position in the list on the right.
+# render_footer W CONTEXT POSITION [MAX] -> FOOT_TXT, one entry per row, and
+# RET, the rows joined by newlines: the keys that work right now, the key
+# bright and its meaning dim, in groups split by a dim dot. A group that does
+# not fit on the row moves to the next one, so the hints take up to MAX rows
+# (default 1); a group wider than a whole row is split between its keys, and
+# what does not fit into MAX rows is left out. The position in the list
+# stands on the right of the first row.
+declare -a FOOT_TXT=()
 render_footer() {
-  local w=$1 pos=$3 out=" " len=1 h k l add room
-  local -a hints=()
+  local w=$1 pos=$3 max=${4:-1} h k l r=0 i n glen room full=0
+  local -a hints=() gt=() gl=() rt=(" ") rl=(1)
+  # an empty entry ends a group
   case $2 in
-    picker) hints=("$GL_K_ARROWS|move" "Tab|next field" "$GL_K_SPACE|choose" "$GL_K_ENTER|accept"
-                   "Esc/q|cancel" "?|help" "e|type a code" "r|reset") ;;
+    picker) hints=("?|help" "$GL_K_ARROWS|move" "Tab|next field" ""
+                   "$GL_K_SPACE|choose" "$GL_K_ENTER|accept" "Esc/q|cancel" ""
+                   "e|type a code" "r|reset") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
-    *)      k=$GL_K_MOVE
-            l="q|quit"
+    *)      l="q|quit"
             [[ $T_VIEW == palette ]] && l="Esc/q|section view"
-            hints=("$k|move" "$GL_K_ENTER|edit" "$GL_K_SPACE|fold" "?|help" "/|search" "u|undo"
-                   "s|save" "$l" "y|copy" "p|paste" "d|clear" "U|undo all" "v|view" "x|codes" "z Z|fold all, none" "c|case pairs") ;;
+            hints=("?|help" "$GL_K_ARROWS|move" "/|search" ""
+                   "$GL_K_ENTER|edit" "s|save" "$l" ""
+                   "y|copy" "p|paste" "d|clear" "u|undo" "U|undo all" ""
+                   "v|view" "x|codes" "$GL_K_SPACE|fold" "z|fold all" "Z|unfold all" "c|case pairs") ;;
   esac
-  room=$(( w - ${#pos} - 2 ))
-  for h in "${hints[@]}"; do
-    k=${h%%|*} l=${h#*|}
-    add=$(( ${#k} + ${#l} + 4 ))
-    (( len + add > room )) && break
-    # a slash between two keys (Esc/q) is dim, like the meaning
-    [[ $k == ?*/?* ]] && k="${k%%/*}${C_0}${C_D}/${C_0}${C_B}${k#*/}"
-    out+="${C_B}$k${C_0} ${C_D}$l${C_0}   "
-    len=$(( len + add ))
-  done
+  hints+=("")
   (( ${#pos} + 1 > w )) && pos=""
-  spaces "$(( w - len - ${#pos} - 1 ))"
-  RET="$out$RET${C_D}$pos${C_0} "
+  for h in "${hints[@]}"; do
+    if [[ -n $h ]]; then
+      k=${h%%|*} l=${h#*|}
+      gl+=("$(( ${#k} + 1 + ${#l} ))")
+      # a slash between two keys (Esc/q) is dim, like the meaning
+      [[ $k == ?*/?* ]] && k="${k%%/*}${C_0}${C_D}/${C_0}${C_B}${k#*/}"
+      gt+=("${C_B}$k${C_0} ${C_D}$l${C_0}")
+      continue
+    fi
+    n=${#gt[@]}
+    (( n )) || continue
+    glen=$(( (n - 1) * 3 ))
+    for i in "${gl[@]}"; do glen=$(( glen + i )); done
+    # the room on row r: the first row leaves room for the position
+    room=$(( w - 1 - (r == 0 && ${#pos} ? ${#pos} + 1 : 0) ))
+    if (( rl[r] > 1 && rl[r] + 3 + glen > room )); then
+      # the group does not fit after the others: it starts a row of its own
+      if (( r + 1 >= max )); then break; fi
+      r=$(( r + 1 )); rt[r]=" " rl[r]=1
+      room=$(( w - 1 ))
+    fi
+    for (( i = 0; i < n; i++ )); do
+      if (( rl[r] > 1 && rl[r] + 3 + gl[i] > room )); then
+        if (( r + 1 >= max )); then full=1; break; fi
+        r=$(( r + 1 )); rt[r]=" " rl[r]=1
+        room=$(( w - 1 ))
+      fi
+      # a key wider than a whole row is left out
+      (( rl[r] + gl[i] > room )) && continue
+      if (( rl[r] > 1 )); then
+        if (( i )); then rt[r]+="   "; else rt[r]+=" ${C_D}$GL_DOT${C_0} "; fi
+        rl[r]=$(( rl[r] + 3 ))
+      fi
+      rt[r]+=${gt[i]}
+      rl[r]=$(( rl[r] + gl[i] ))
+    done
+    (( full )) && break
+    gt=() gl=()
+  done
+  FOOT_TXT=()
+  RET=""
+  for (( i = 0; i <= r; i++ )); do
+    if (( i == 0 )); then
+      spaces "$(( w - rl[0] - ${#pos} - 1 ))"
+      FOOT_TXT+=("${rt[0]}$RET${C_D}$pos${C_0} ")
+    else
+      spaces "$(( w - rl[i] ))"
+      FOOT_TXT+=("${rt[i]}$RET")
+    fi
+  done
+  RET=""
+  for h in "${FOOT_TXT[@]}"; do RET+="${RET:+$NL}$h"; done
 }
 
 # row_text REF LIMIT -> RET text, RET2 its width: what stands behind the
@@ -3316,13 +3366,48 @@ layout() {
   fi
 }
 
+# footer_rows W CONTEXT POSITION [WIDEST]: the key hints for a screen of ROWS
+# rows in FOOT_TXT; the hints take at most half of the rows below the header,
+# so the list keeps the other half. The number of rows comes from the widest
+# position there can be (WIDEST; by default the one of a heading or of the
+# last entry) and, for a prompt, from the hints of the list or picker behind
+# it, so the list keeps its height while the cursor moves or a prompt is
+# open. Sets MSG_ROW, the message row just above the hints, and LIST_H, the
+# rows left between the two rules.
+MSG_ROW=$(( ${ROWS:-24} - 1 )) LIST_H=1
+footer_rows() {
+  local max=$(( (ROWS - 4) / 2 )) base=$2 widest n
+  (( max < 1 )) && max=1
+  if (( $# > 3 )); then widest=$4
+  else
+    widest="$T_TOTAL entries"
+    (( ${#widest} < 2 * ${#T_TOTAL} + 1 )) && widest="$T_TOTAL/$T_TOTAL"
+  fi
+  if [[ $base == prompt || $base == picker ]]; then
+    if [[ $T_FOCUS == picker ]]; then base=picker widest=""; else base=list; fi
+  fi
+  render_footer "$1" "$base" "$widest" "$max"
+  n=${#FOOT_TXT[@]}
+  render_footer "$1" "$2" "$3" "$n"
+  while (( ${#FOOT_TXT[@]} < n )); do FOOT_TXT+=(""); done
+  MSG_ROW=$(( ROWS - n ))
+  LIST_H=$(( ROWS - 4 - n ))
+  (( LIST_H < 1 )) && LIST_H=1
+}
+
 # compose_frame -> RET: the whole screen as frame text for emit_frame.
 # Row 1 header, row 2 a rule, then the panes, a rule, the message row and
-# the key hints.
+# the key hints (one row or more).
 compose_frame() {
-  local buf r h=$(( ROWS - 5 )) pos="" lw rw lrule rrule line
-  (( h < 1 )) && h=1
+  local buf r h pos="" lw rw lrule rrule line foot
   layout
+  case ${ROW_KIND[T_CUR]:-} in
+    e) cur_entry; pos="${E_ORD[RET]}/$T_TOTAL" ;;
+    h) pos="$T_TOTAL entries" ;;
+  esac
+  [[ $T_FOCUS == picker ]] && pos=""
+  footer_rows "$COLS" "$T_CTX" "$pos"
+  h=$LIST_H foot=$(( MSG_ROW - 1 ))
   if [[ $T_LAYOUT == small ]]; then
     local -a lines=()
     buf=""
@@ -3365,29 +3450,25 @@ compose_frame() {
         spaces "$(( lw - LP_LEN[r] ))"
         buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}${C_0}$RET${C_D}$GL_V${C_0}${RP_TXT[r]:-}"
       done
-      buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$lrule${C_D}$GL_FOOT${C_0}$rrule" ;;
+      buf+="${ROW_AT}${foot}${ROW_TXT}$lrule${C_D}$GL_FOOT${C_0}$rrule" ;;
     full)
       rule "$COLS"; line="${C_D}$RET${C_0}"
       buf+="${ROW_AT}2${ROW_TXT}$line"
       render_picker "$COLS" "$h"
       for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${RP_TXT[r]:-}"; done
-      buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line" ;;
+      buf+="${ROW_AT}${foot}${ROW_TXT}$line" ;;
     *)
       rule "$COLS"; line="${C_D}$RET${C_0}"
       buf+="${ROW_AT}2${ROW_TXT}$line"
       render_list "$COLS" "$h"
       for (( r = 0; r < h; r++ )); do buf+="${ROW_AT}$(( r + 3 ))${ROW_TXT}${LP_TXT[r]}"; done
-      buf+="${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line" ;;
+      buf+="${ROW_AT}${foot}${ROW_TXT}$line" ;;
   esac
   info_line "$COLS"
-  buf+="${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}$RET"
-  case ${ROW_KIND[T_CUR]:-} in
-    e) cur_entry; pos="${E_ORD[RET]}/$T_TOTAL" ;;
-    h) pos="$T_TOTAL entries" ;;
-  esac
-  [[ $T_FOCUS == picker ]] && pos=""
-  render_footer "$COLS" "$T_CTX" "$pos"
-  buf+="${ROW_AT}${ROWS}${ROW_TXT}$RET"
+  buf+="${ROW_AT}${MSG_ROW}${ROW_TXT}$RET"
+  for (( r = 0; r < ${#FOOT_TXT[@]}; r++ )); do
+    buf+="${ROW_AT}$(( MSG_ROW + 1 + r ))${ROW_TXT}${FOOT_TXT[r]}"
+  done
   RET=$buf
 }
 
@@ -3853,8 +3934,8 @@ count_changes() {
 
 # ask_yes QUESTION: a yes/no question on the message row; only y is yes.
 ask_yes() {
-  printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K ${C_Y}$1 [y/N]${C_0} "
-  unset "FRAME[$(( ROWS - 1 ))]"
+  printf '%s' "${ESC}[${MSG_ROW};1H${ESC}[K ${C_Y}$1 [y/N]${C_0} "
+  unset "FRAME[$MSG_ROW]"
   # Ctrl-C answers no and is left for the list, which then asks to quit
   while ! read_key 0.5; do
     if (( INTR )); then return 1; fi
@@ -4267,32 +4348,35 @@ help_rows() {
 
 # show_help: the help screen; it scrolls when the terminal is short.
 show_help() {
-  local buf y line top=0 h=$(( ROWS - 5 )) n i ctx=$T_CTX
+  local buf y line top=0 h n i ctx=$T_CTX
   help_rows "$(( COLS - 2 ))"
   n=${#HELP_ROWS[@]}
-  (( h < 1 )) && h=1
   T_CTX=help
   while :; do
+    # the rows the hints take, with a position as wide as it can get
+    footer_rows "$COLS" help "" "$n-$n/$n"
+    h=$LIST_H
     (( top > n - h )) && top=$(( n - h ))
     (( top < 0 )) && top=0
     render_header "$COLS"
     buf="${ROW_AT}1${ROW_TXT}$RET"
     rule "$COLS"
     line="${C_D}$RET${C_0}"
-    buf+="${ROW_AT}2${ROW_TXT}$line${ROW_AT}$(( ROWS - 2 ))${ROW_TXT}$line${ROW_AT}$(( ROWS - 1 ))${ROW_TXT}"
+    buf+="${ROW_AT}2${ROW_TXT}$line${ROW_AT}$(( MSG_ROW - 1 ))${ROW_TXT}$line${ROW_AT}${MSG_ROW}${ROW_TXT}"
     for (( y = 0; y < h; y++ )); do
       i=$(( top + y ))
       buf+="${ROW_AT}$(( y + 3 ))${ROW_TXT}"
       (( i < n )) && buf+="  ${HELP_ROWS[i]:0:$(( COLS - 2 > 0 ? COLS - 2 : 0 ))}"
     done
     if (( n > h )); then line="$(( top + 1 ))-$(( top + h < n ? top + h : n ))/$n"; else line=""; fi
-    render_footer "$COLS" help "$line"
-    buf+="${ROW_AT}${ROWS}${ROW_TXT}$RET"
+    footer_rows "$COLS" help "$line" "$n-$n/$n"
+    for (( y = 0; y < ROWS - MSG_ROW; y++ )); do
+      buf+="${ROW_AT}$(( MSG_ROW + 1 + y ))${ROW_TXT}${FOOT_TXT[y]:-}"
+    done
     emit_frame "$buf"
     while ! read_key 0.5; do
       if (( RESIZED )); then
         RESIZED=0; term_size; screen_reset
-        h=$(( ROWS - 5 )); (( h < 1 )) && h=1
         help_rows "$(( COLS - 2 ))"; n=${#HELP_ROWS[@]}
         continue 2
       fi
@@ -4358,7 +4442,8 @@ cmd_edit() {
   term_size
   build_groups
   # a file that does not fit on one screen starts as a list of its sections
-  (( ${#E_LABEL[@]} + ${#G_TITLE[@]} > ROWS - 5 )) && T_FOLD_DEFAULT=1
+  footer_rows "$COLS" list ""
+  (( ${#E_LABEL[@]} + ${#G_TITLE[@]} > LIST_H )) && T_FOLD_DEFAULT=1
   CUR_ID=""
   build_rows
   tui_start
@@ -4375,7 +4460,7 @@ cmd_edit() {
       continue
     fi
     T_MSG=""
-    page=$(( ROWS - 6 ))
+    page=$(( LIST_H - 1 ))
     (( page < 1 )) && page=1
     case $KEY in
       up|k)    move_cursor -1 ;;
@@ -4453,8 +4538,8 @@ cmd_edit() {
         # more at the question quits
         INTR=0
         if (( ${#ST[@]} )) && [[ $KEY != eof ]]; then
-          printf '%s' "${ESC}[$(( ROWS - 1 ));1H${ESC}[K ${C_Y}${#ST[@]} unsaved changes. Quit without saving? [y/N]${C_0} "
-          unset "FRAME[$(( ROWS - 1 ))]"
+          printf '%s' "${ESC}[${MSG_ROW};1H${ESC}[K ${C_Y}${#ST[@]} unsaved changes. Quit without saving? [y/N]${C_0} "
+          unset "FRAME[$MSG_ROW]"
           while ! read_key 0.5; do
             if (( INTR )); then KEY=y; break; fi
           done

@@ -129,7 +129,27 @@ has "$RET" "1 unsaved" "the header counts staged changes"
 is "${#RET}" 90 "...and fills the width exactly"
 ST=()
 plain render_footer 60 list 1/5
-is "$RET" " up/down move   Enter edit   Space fold   ? help        1/5 " "hints that do not fit are left out; the position is on the right"
+is "$RET" " ? help   arrows move   / search                        1/5 " "on one row, the groups that do not fit are left out; the position is on the right"
+plain render_footer 120 list 1/5 3
+is "$RET" " ? help   arrows move   / search - Enter edit   s save   q quit - y copy   p paste   d clear   u undo   U undo all  1/5 
+ v view   x codes   Space fold   z fold all   Z unfold all   c case pairs                                               " "groups are split by a dot; a group that does not fit moves to the next row"
+plain render_footer 40 list "" 9
+is "${FOOT_TXT[2]}|${FOOT_TXT[3]}" " y copy   p paste   d clear   u undo    | U undo all                             " "a group wider than a row is split between its keys"
+plain render_footer 60 list 1/5 2
+is "${#FOOT_TXT[@]}" 2 "...and the hints never take more rows than allowed"
+old_total=$T_TOTAL
+ROWS=40 T_TOTAL=120
+heights=""
+for w in 100 106 110 114 116 118 120 130; do
+  footer_rows "$w" list "120 entries"; a=$LIST_H
+  footer_rows "$w" list "9/120"; b=$LIST_H
+  footer_rows "$w" prompt "9/120"; heights+="$a$b$LIST_H "
+  [[ $a == "$b" && $b == "$LIST_H" ]] || heights+="(differs at $w) "
+done
+if [[ $heights != *differs* ]]; then pass "the list keeps its height on a heading, on an entry and while a prompt is open"
+else fail "the list keeps its height on a heading, on an entry and while a prompt is open" "$heights"
+fi
+ROWS=12 T_TOTAL=$old_total
 plain render_footer 60 picker ""
 has "$RET" "Tab next field" "the picker has hints of its own"
 plain render_footer 60 prompt ""
@@ -144,12 +164,12 @@ is "$RET" " pairs.dircolors - section view - 0 unsaved
 >    example.tar       .tar / .TAR     red
      example.gz        .gz / .GZ       red | green  differs
      example.zip       .zip            red
- - images       2   magenta
-     example.png       .png / .PNG     magenta
-     example.jpg       .jpg            magenta
 ------------------------------------------------------------
 
- up/down move   Enter edit   Space fold   ? help        1/5 " "header, rule, list, rule, message row, key hints"
+ ? help   arrows move   / search                        1/5 
+ Enter edit   s save   q quit                               
+ y copy   p paste   d clear   u undo   U undo all           
+ v view   x codes   Space fold   z fold all   Z unfold all  " "header, rule, list, rule, message row, key hints; the hints take at most half the rows"
 T_FILTER=png CUR_ID=""; build_rows
 frame_text
 has "$RET" " filter: png  (Esc clears)" "an active filter is shown above the hints"
@@ -205,7 +225,7 @@ frame=$RET
 widest "$frame"
 is "$RET" 100 "split: no row is wider than the terminal"
 RET=$frame; columns_at 56
-is "${RET:1:21}" "+|||||||||||||||||||+" "split: the panes are divided by one straight line"
+is "${RET:1:20}" "+||||||||||||||||||+" "split: the panes are divided by one straight line"
 has "$frame" "|  .tar / .TAR" "split: the picker is on the right"
 has "$frame" ">    example.tar" "split: the list stays on the left"
 has "$frame" "Foreground   red" "split: the colour under the cursor is named next to the field"
