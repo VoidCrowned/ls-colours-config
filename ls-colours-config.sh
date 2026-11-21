@@ -1950,7 +1950,10 @@ fix_novalue() {
       printf '    line %-4s %-10s ->  %-9s %s  %s(%s)%s%s\n' "$i" "${L_KEY[i]}" "${vals[k]}" "$RET" "$C_D" "$RET2" "$C_0" "$sec"
     else
       none=$(( none + 1 ))
-      printf '    line %-4s %-10s ->  no colour to propose%s\n' "$i" "${L_KEY[i]}" "$sec"
+      case ${L_KIND[i]} in
+        pattern|type) printf '    line %-4s %-10s ->  no colour to propose%s\n' "$i" "${L_KEY[i]}" "$sec" ;;
+        *)            printf '    line %-4s %-10s ->  not a colour entry: delete it or correct it by hand\n' "$i" "${L_KEY[i]}" ;;
+      esac
     fi
   done
   ask "  Fix them? [a = give each the proposed colour, e = choose per entry, d = delete them all, Enter = none]"
@@ -1967,7 +1970,9 @@ fix_novalue() {
       for k in "${!lines[@]}"; do
         i=${lines[k]} val=${vals[k]}
         while :; do
-          if [[ -n $val ]]; then
+          if [[ ${L_KIND[i]} != pattern && ${L_KIND[i]} != type ]]; then
+            ask "    line $i ${L_KEY[i]}: [d = delete, Enter or s = skip, q = stop asking]"
+          elif [[ -n $val ]]; then
             ask "    line $i ${L_KEY[i]}: [Enter = $val, or type a colour code, d = delete, s = skip, q = stop asking]"
           else
             ask "    line $i ${L_KEY[i]}: [type a colour code, d = delete, Enter or s = skip, q = stop asking]"
@@ -1981,7 +1986,9 @@ fix_novalue() {
               [[ -n $val ]] || break
               set_value "$i" "$val"; n=$(( n + 1 )); break ;;
             *)
-              if valid_value "$REPLY"; then
+              if [[ ${L_KIND[i]} != pattern && ${L_KIND[i]} != type ]]; then
+                printf '    Please answer with d, s or q.\n'
+              elif valid_value "$REPLY"; then
                 set_value "$i" "$REPLY"; n=$(( n + 1 )); break
               fi
               printf '    %s is not a colour code. Codes look like 01;34 (numbers separated by ;).\n' "$REPLY" ;;

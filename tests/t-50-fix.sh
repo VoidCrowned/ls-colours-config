@@ -187,6 +187,12 @@ fresh nocolour.dircolors
 before=$(cat "$F")
 fixrun '\n\n\nn\nn\n' --case-sensitive "$F"
 is "$(cat "$F")" "$before" "Enter leaves the lines alone"
+printf '.tar 31\nTERM\n.zip 32\n' >"$WORK/term-novalue"
+F="$WORK/term-novalue"
+fixrun 'e\n32\nd\n\n\nn\ny\n' "$F"
+has "$OUT" "not a colour entry" "a bare keyword line is not offered a colour"
+has "$OUT" "Please answer with d, s or q." "...a colour code is refused for it"
+is "$(cat "$F")" ".tar 31${NL}.zip 32" "...and d removes it"
 fresh problems.dircolors
 fixrun '' "$F"
 has "$OUT" "Every entry has a colour." "says so when every entry has a colour"
