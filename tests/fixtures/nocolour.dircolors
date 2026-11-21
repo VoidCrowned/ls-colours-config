@@ -1,0 +1,9 @@
+# archives
+.tar 01;31
+.zip 01;31
+.rar
+.cpio   # keep me
+
+# other
+.zzz
+DIR
