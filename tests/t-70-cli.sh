@@ -51,19 +51,23 @@ st() {
   RET=$(HOME=$h XDG_CONFIG_HOME="" ZDOTDIR=""
         if startup_target; then printf '%s|%s' "${STARTUP_TARGET#"$h"}" "${STARTUP_FILE#"$h"}"; else printf none; fi)
 }
-st .bashrc '    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"'
-is "$RET" "/.dircolors|/.bashrc" "Ubuntu's default .bashrc: ~/.dircolors"
-st .zshrc 'eval "$(dircolors -b $HOME/.dir_colors)"'
-is "$RET" "/.dir_colors|/.zshrc" ".zshrc with \$HOME"
-st .bashrc 'eval "$(dircolors -b "${XDG_CONFIG_HOME:-$HOME/.config}/dircolors")"'
-is "$RET" "/.config/dircolors|/.bashrc" "XDG spelling"
-st .profile 'eval "$(dircolors -b ${HOME}/.dircolors)"'
-is "$RET" "/.dircolors|/.profile" ".profile with \${HOME}"
-st .bashrc '# eval "$(dircolors -b ~/.dircolors)"'
-is "$RET" "none" "a commented-out line does not count"
-st .bashrc 'eval "$(dircolors -b ~/.dircolors.bak)"'
-is "$RET" "none" "a different file name does not count"
-st .bashrc 'eval "$(dircolors -b)"'
-is "$RET" "none" "dircolors without a file does not count"
-st .bashrc 'export PATH=~/.dircolors:$PATH'
-is "$RET" "none" "the path on a line without dircolors does not count"
+# The start-up file lines are single-quoted: their $ is literal text.
+# shellcheck disable=SC2016
+{
+  st .bashrc '    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"'
+  is "$RET" "/.dircolors|/.bashrc" "Ubuntu's default .bashrc: ~/.dircolors"
+  st .zshrc 'eval "$(dircolors -b $HOME/.dir_colors)"'
+  is "$RET" "/.dir_colors|/.zshrc" ".zshrc with \$HOME"
+  st .bashrc 'eval "$(dircolors -b "${XDG_CONFIG_HOME:-$HOME/.config}/dircolors")"'
+  is "$RET" "/.config/dircolors|/.bashrc" "XDG spelling"
+  st .profile 'eval "$(dircolors -b ${HOME}/.dircolors)"'
+  is "$RET" "/.dircolors|/.profile" ".profile with \${HOME}"
+  st .bashrc '# eval "$(dircolors -b ~/.dircolors)"'
+  is "$RET" "none" "a commented-out line does not count"
+  st .bashrc 'eval "$(dircolors -b ~/.dircolors.bak)"'
+  is "$RET" "none" "a different file name does not count"
+  st .bashrc 'eval "$(dircolors -b)"'
+  is "$RET" "none" "dircolors without a file does not count"
+  st .bashrc 'export PATH=~/.dircolors:$PATH'
+  is "$RET" "none" "the path on a line without dircolors does not count"
+}
