@@ -17,7 +17,7 @@ d "01;02;04;05;07;35" "magenta, bold, dim, underline, blink, reverse" "every att
 d "03;31" "red, italic" "codes without a switch in the picker are named"
 d "31;;1" "not a valid code: 31;;1" "an empty field"
 d "red" "not a valid code: red" "a word"
-d "" "not a valid code: empty" "nothing"
+d "" "no colour" "nothing: a line without a value"
 d "38;5;999" "not a valid code: 38;5;999" "a colour number that does not exist"
 is "${V_DESC[k31]}" "red" "descriptions are remembered"
 

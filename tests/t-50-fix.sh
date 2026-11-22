@@ -156,3 +156,44 @@ out=$(print_diff)
 has "$out" "-    2  .tar 31" "without colours the diff shows the codes as before"
 has "$out" "+    2  .tar 01;33" "...on both sides"
 OPT_COLOUR=$saved_colour; setup_colour
+
+group "fix: entries without a colour"
+dc_accepts() { TERM=xterm "$DC" -b "$1" >/dev/null 2>&1; }
+fresh nocolour.dircolors
+before=$(cat "$F")
+# step 1: a; file types: Enter; patterns: Enter; reorganise: n; write: y
+fixrun 'a\n\n\nn\ny\n' --case-sensitive "$F"
+has "$OUT" "Step 1 of 6: entries without a colour" "fix starts with the entries without a colour"
+has "$OUT" ".rar       ->  01;31" "...and proposes the colour of their category"
+has "$OUT" "(system database)" "...or the value of the system database"
+has "$OUT" ".zzz       ->  00" "...and the default colour when there is nothing else to go by"
+has "$OUT" "(default colour, nothing else to go by)" "...and says why"
+has "$(cat "$F")" "${NL}.rar 01;31${NL}" "a: the proposed colour is written"
+has "$(cat "$F")" "${NL}.cpio 01;31   # keep me${NL}" "...and a trailing comment keeps its place"
+has "$(cat "$F")" "${NL}DIR 01;34" "...file types get the database value"
+has "$(cat "$F")" "${NL}.zzz 00${NL}" "...also the default colour"
+ok "...and dircolors accepts the file again" dc_accepts "$F"
+fresh nocolour.dircolors
+fixrun 'd\n\n\ny\n' --case-sensitive "$F"
+hasnt "$(cat "$F")" ".rar" "d: the lines without a colour are removed"
+ok "...and dircolors accepts the file again" dc_accepts "$F"
+fresh nocolour.dircolors
+# .rar: Enter (proposal); .cpio: a bad code, then 35; .zzz: d; DIR: s
+fixrun 'e\n\nzz\n35\nd\ns\n\n\nn\ny\n' --case-sensitive "$F"
+has "$OUT" "zz is not a colour code" "e: a bad code is refused"
+has "$(cat "$F")" "${NL}.rar 01;31${NL}.cpio 35   # keep me${NL}" "e: Enter takes the proposal, a typed code is used"
+hasnt "$(cat "$F")" ".zzz" "e: d removes the line"
+is "$(tail -n 1 "$F")" "DIR" "e: s leaves the line alone"
+fresh nocolour.dircolors
+before=$(cat "$F")
+fixrun '\n\n\nn\nn\n' --case-sensitive "$F"
+is "$(cat "$F")" "$before" "Enter leaves the lines alone"
+printf '.tar 31\nTERM\n.zip 32\n' >"$WORK/term-novalue"
+F="$WORK/term-novalue"
+fixrun 'e\n32\nd\n\n\nn\ny\n' "$F"
+has "$OUT" "not a colour entry" "a bare keyword line is not offered a colour"
+has "$OUT" "Please answer with d, s or q." "...a colour code is refused for it"
+is "$(cat "$F")" ".tar 31${NL}.zip 32" "...and d removes it"
+fresh problems.dircolors
+fixrun '' "$F"
+has "$OUT" "Every entry has a colour." "says so when every entry has a colour"

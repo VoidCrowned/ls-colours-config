@@ -581,8 +581,17 @@ read_file() {
 
 # set_value LINE VALUE: change the value on one line and nothing else on it.
 set_value() {
-  local i=$1
-  SRC[i]="${L_PRE[i]}$2${L_POST[i]}"
+  local i=$1 pre post ws
+  pre=${L_PRE[i]} post=${L_POST[i]}
+  if [[ -z ${L_VAL[i]} ]]; then
+    # a line without a value: the value goes right after the key, and the
+    # space that stood before a trailing comment stays in front of it
+    ws=${pre##*[![:space:]]}
+    pre=${pre%"$ws"}$ST_SEP
+    [[ $post == "#"* ]] && post=${ws:- }$post
+    L_PRE[i]=$pre L_POST[i]=$post
+  fi
+  SRC[i]="$pre$2$post"
   L_VAL[i]=$2
 }
 
@@ -1269,7 +1278,7 @@ run_checks() {
     if [[ -z $val ]]; then
       add_finding error novalue "$i" "$key has no value" \
         "dircolors rejects the whole file because of this line, so no colours are set at all." \
-        "fix does not change it; give it a colour or delete the line by hand."
+        "fix offers to give it a colour or delete it."
       continue
     fi
     case $kind in
@@ -1849,7 +1858,7 @@ confirm() {
   [[ $REPLY == [yY] || $REPLY == [yY][eE][sS] ]]
 }
 
-step() { printf '\n%sStep %s of 5: %s%s\n' "$C_B" "$1" "$2" "$C_0"; }
+step() { printf '\n%sStep %s of 6: %s%s\n' "$C_B" "$1" "$2" "$C_0"; }
 
 # refresh: apply queued edits and bring the findings up to date.
 refresh() {
@@ -1880,7 +1889,121 @@ style_detect() {
   [[ -n $ST_SEP ]] || ST_SEP=" "
 }
 
-# --- step 1: duplicates ----------------------------------------------------
+# --- step 1: entries without a colour ----------------------------------------
+
+# propose_value LINE -> RET: a colour for a line that has none, RET2: where
+# it comes from. With nothing better it is 00, the terminal's default colour.
+# Empty for lines that are not colour entries.
+propose_value() {
+  local i=$1 p=${L_NORM[$1]}
+  RET="" RET2=""
+  case ${L_KIND[i]} in
+    pattern)
+      entry_category "$p" "${L_SEC[i]}"
+      if [[ -n $RET && -n ${CAT_MAJ[$RET]:-} ]]; then
+        RET2="most of your $RET entries"
+        RET=${CAT_MAJ[$RET]}
+      elif [[ -n ${DB_VAL[$p]:-} ]]; then
+        RET=${DB_VAL[$p]} RET2="system database"
+      else
+        RET=00 RET2="default colour, nothing else to go by"
+      fi ;;
+    type)
+      if [[ -n ${DB_TYPE[$p]:-} ]]; then
+        RET=${DB_TYPE[$p]} RET2="system database"
+      else
+        RET=00 RET2="default colour, nothing else to go by"
+      fi ;;
+  esac
+}
+
+# valid_value VALUE: true for a colour code dircolors and ls can use.
+valid_value() {
+  [[ -n $1 && $1 =~ $RE_SGR ]] || return 1
+  sgr_parse "$1"
+  [[ -z $SGR_BAD ]]
+}
+
+fix_novalue() {
+  local -a lines=() vals=()
+  local i k name val sec n=0 gone=0 none=0
+  for (( i = 1; i <= N; i++ )); do
+    case ${L_KIND[i]} in
+      blank|comment|other) continue ;;
+    esac
+    [[ -z ${L_VAL[i]} ]] && lines+=("$i")
+  done
+  step 1 "entries without a colour"
+  if (( ! ${#lines[@]} )); then
+    printf '  Every entry has a colour.\n'
+    return
+  fi
+  style_detect
+  load_db
+  compute_majorities
+  printf '  %d lines have no colour. dircolors rejects the whole file because of them,\n' "${#lines[@]}"
+  printf '  so ls shows no colours at all until each one has a colour or is gone.\n'
+  for k in "${!lines[@]}"; do
+    i=${lines[k]}
+    propose_value "$i"
+    vals[k]=$RET
+    sec=""
+    (( L_SEC[i] )) && sec="  $C_D(${SEC_TITLE[${L_SEC[i]}]})$C_0"
+    if [[ -n $RET ]]; then
+      if [[ ${L_KIND[i]} == pattern ]]; then sample_name "${L_NORM[i]}"; name=$RET; else name=${TYPE_SAMPLE[${L_NORM[i]}]:-sample}; fi
+      paint "${vals[k]}" "$name"
+      printf '    line %-4s %-10s ->  %-9s %s  %s(%s)%s%s\n' "$i" "${L_KEY[i]}" "${vals[k]}" "$RET" "$C_D" "$RET2" "$C_0" "$sec"
+    else
+      none=$(( none + 1 ))
+      printf '    line %-4s %-10s ->  not a colour entry: delete it or correct it by hand\n' "$i" "${L_KEY[i]}"
+    fi
+  done
+  ask "  Fix them? [a = give each the proposed colour, e = choose per entry, d = delete them all, Enter = none]"
+  case $REPLY in
+    a|A)
+      for k in "${!lines[@]}"; do
+        [[ -n ${vals[k]} ]] || continue
+        set_value "${lines[k]}" "${vals[k]}"; n=$(( n + 1 ))
+      done
+      (( none )) && printf '  %d lines are not colour entries and stay as they are; run fix again and delete them with d.\n' "$none" ;;
+    d|D)
+      for i in "${lines[@]}"; do delete_line "$i"; gone=$(( gone + 1 )); done ;;
+    e|E)
+      for k in "${!lines[@]}"; do
+        i=${lines[k]} val=${vals[k]}
+        while :; do
+          if [[ ${L_KIND[i]} != pattern && ${L_KIND[i]} != type ]]; then
+            ask "    line $i ${L_KEY[i]}: [d = delete, Enter or s = skip, q = stop asking]"
+          elif [[ -n $val ]]; then
+            ask "    line $i ${L_KEY[i]}: [Enter = $val, or type a colour code, d = delete, s = skip, q = stop asking]"
+          else
+            ask "    line $i ${L_KEY[i]}: [type a colour code, d = delete, Enter or s = skip, q = stop asking]"
+          fi
+          (( ASK_EOF )) && break 2
+          case $REPLY in
+            q|Q) break 2 ;;
+            s|S) break ;;
+            d|D) delete_line "$i"; gone=$(( gone + 1 )); break ;;
+            "")
+              [[ -n $val ]] || break
+              set_value "$i" "$val"; n=$(( n + 1 )); break ;;
+            *)
+              if [[ ${L_KIND[i]} != pattern && ${L_KIND[i]} != type ]]; then
+                printf '    Please answer with d, s or q.\n'
+              elif valid_value "$REPLY"; then
+                set_value "$i" "$REPLY"; n=$(( n + 1 )); break
+              fi
+              printf '    %s is not a colour code. Codes look like 01;34 (numbers separated by ;).\n' "$REPLY" ;;
+          esac
+        done
+      done ;;
+  esac
+  (( n )) && printf '  %d lines given a colour.\n' "$n"
+  (( gone )) && printf '  %d lines removed.\n' "$gone"
+  refresh
+}
+
+# --- step 2: duplicates ----------------------------------------------------
 
 fix_duplicates() {
   local -a keys=() pick=()
@@ -1891,7 +2014,7 @@ fix_duplicates() {
   for p in $TYPE_CODES; do
     [[ ${TYPE_LINES[$p]:-} == " "*" "* ]] && keys+=("$p")
   done
-  step 1 "duplicates"
+  step 2 "duplicates"
   if (( ! ${#keys[@]} )); then
     printf '  Nothing is defined twice.\n'
     return
@@ -1950,7 +2073,7 @@ fix_duplicates() {
   refresh
 }
 
-# --- step 2: lines that do nothing -------------------------------------------
+# --- step 3: lines that do nothing -------------------------------------------
 
 # delete_block FIRST LAST: queue the lines FIRST..LAST for removal. A short
 # comment that stands directly above them and belongs to nothing else (blank
@@ -1977,7 +2100,7 @@ fix_cleanup() {
       term)     (( i > LAST_COLOUR_LINE )) && dead+=("$i") ;;
     esac
   done
-  step 2 "lines that do nothing"
+  step 3 "lines that do nothing"
   if (( ${#obsolete[@]} )); then
     any=1
     printf '  %d obsolete keyword lines (%s): dircolors ignores them.\n' "${#obsolete[@]}" "$list"
@@ -2014,7 +2137,7 @@ fix_cleanup() {
   refresh
 }
 
-# --- step 3: colours that stand out -----------------------------------------
+# --- step 4: colours that stand out -----------------------------------------
 
 # recolour INDEX: give outlier INDEX the colour of its category, on every
 # line that defines it (and on its case twins, unless they are separate).
@@ -2031,7 +2154,7 @@ recolour() {
 
 fix_outliers() {
   local i cat key old new n=0
-  step 3 "colours that stand out"
+  step 4 "colours that stand out"
   if (( ! ${#O_PAT[@]} )); then
     printf '  No entry stands out from its category.\n'
     return
@@ -2066,7 +2189,7 @@ fix_outliers() {
   refresh
 }
 
-# --- step 4: missing entries -------------------------------------------------
+# --- step 5: missing entries -------------------------------------------------
 
 # add_missing_types: queue the file type lines the user accepted.
 add_missing_types() {
@@ -2148,7 +2271,7 @@ queue_missing() {
 fix_missing() {
   local -a chosen=() cats=()
   local cat i n none line tag stop=0
-  step 4 "missing entries"
+  step 5 "missing entries"
   style_detect
   if (( ! ${#MT_CODE[@]} && ! ${#M_PAT[@]} )); then
     printf '  Nothing is missing.\n'
@@ -2230,7 +2353,7 @@ fix_missing() {
   refresh
 }
 
-# --- step 5: reorganise ------------------------------------------------------
+# --- step 6: reorganise ------------------------------------------------------
 
 # reorg_keys: one sort key per movable pattern line: section rank, the
 # pattern it extends (or itself), pattern, spelling, line number.
@@ -2392,7 +2515,7 @@ build_reorganised() {
 
 fix_reorganise() {
   local i same=1 x
-  step 5 "reorganise the sections"
+  step 6 "reorganise the sections"
   if ! build_reorganised; then
     printf '  There are no pattern lines to reorganise.\n'
     return
@@ -2473,17 +2596,19 @@ Usage: $PROG fix [OPTIONS] [FILE]
 Walk through the findings of check and repair them. Every step asks first,
 and nothing is written until you have seen the complete diff and confirmed.
 
-  1. duplicates       pick the definition to keep (Enter keeps the last
+  1. no colour        give entries without a colour one (or delete them);
+                      dircolors rejects the whole file while one is left
+  2. duplicates       pick the definition to keep (Enter keeps the last
                       one, which is what ls uses already)
-  2. dead lines       obsolete keywords, TERM lines without effect and,
+  3. dead lines       obsolete keywords, TERM lines without effect and,
                       where ls ignores case, redundant upper-case twins
-  3. odd colours      entries that differ from the colour nearly all
+  4. odd colours      entries that differ from the colour nearly all
                       entries of their category have; change all, some
                       or none
-  4. missing entries  add common patterns in the colour most entries of
+  5. missing entries  add common patterns in the colour most entries of
                       their category have; accept all, per category or
                       per entry
-  5. reorganise       group patterns by category and sort the sections
+  6. reorganise       group patterns by category and sort the sections
 
 Before writing, a backup named FILE.bak-DATE-TIME is created next to the
 file.
@@ -2505,6 +2630,7 @@ cmd_fix() {
   printf '%sfix:%s %s' "$C_B" "$C_0" "$FILE"
   (( OPT_DRY )) && printf '  (dry run, nothing will be written)'
   printf '\n'
+  fix_novalue
   fix_duplicates
   fix_cleanup
   fix_outliers
@@ -2665,16 +2791,21 @@ line_input() {
 build_entries() {
   local -A seen=()
   local -a spell=()
-  local i q code p lower lines label name first
+  local i q code p lower lines bare label name first
   E_LABEL=() E_NAME=() E_LINES=() E_SEC=()
+  # Lines without a value are listed only for an entry that has nothing
+  # else, so that it can be given a colour; fix deals with the others.
   for (( i = 1; i <= N; i++ )); do
-    [[ ${L_KIND[i]} == type && -n ${L_VAL[i]} ]] || continue
+    [[ ${L_KIND[i]} == type ]] || continue
     code=${L_NORM[i]}
     [[ " $TYPES_RAW " == *" $code "* ]] && continue
     [[ -n ${seen[t$code]:-} ]] && continue
     seen[t$code]=1
-    lines=""
-    for q in ${TYPE_LINES[$code]}; do [[ -n ${L_VAL[q]} ]] && lines+=" $q"; done
+    lines="" bare=""
+    for q in ${TYPE_LINES[$code]}; do
+      if [[ -n ${L_VAL[q]} ]]; then lines+=" $q"; else bare+=" $q"; fi
+    done
+    lines=${lines:-$bare}
     E_LABEL+=("${TYPE_NAME[$code]}") E_NAME+=("${TYPE_SAMPLE[$code]:-sample}")
     E_LINES+=("$lines") E_SEC+=("file types")
   done
@@ -2687,13 +2818,16 @@ build_entries() {
       seen[p$lower]=1
       read -r -a spell <<<"${LPAT[$lower]}"
     fi
-    lines="" label="" name=${spell[0]}
+    lines="" bare="" label="" name=${spell[0]}
     for q in "${spell[@]}"; do
-      for i in ${PAT_LINES[$q]}; do [[ -n ${L_VAL[i]} ]] && lines+=" $i"; done
+      for i in ${PAT_LINES[$q]}; do
+        if [[ -n ${L_VAL[i]} ]]; then lines+=" $i"; else bare+=" $i"; fi
+      done
       pattern_key "$q"
       label+="${label:+ / }$RET"
       [[ $q == "${q,,}" ]] && name=$q
     done
+    lines=${lines:-$bare}
     [[ -n $lines ]] || continue
     sample_name "$name"
     first=${lines# }
@@ -2931,7 +3065,8 @@ entry_values() {
   for i in ${E_LINES[$1]}; do
     v=${PV[$1]-${ST[i]-${L_VAL[i]}}}
     [[ $v != "${L_VAL[i]}" ]] && EV_MOD=1
-    [[ " ${EV_LIST[*]} " == *" $v "* ]] || EV_LIST+=("$v")
+    # an empty value (a line without one) would match an empty list
+    (( ${#EV_LIST[@]} )) && [[ " ${EV_LIST[*]} " == *" $v "* ]] || EV_LIST+=("$v")
     if (( i > last )); then last=$i EV_EFF=$v; fi
   done
 }
@@ -3013,6 +3148,7 @@ describe_colour() {
 describe_value() {
   local v=$1 out="" a tok
   local -a toks=()
+  if [[ -z $v ]]; then RET="no colour"; return; fi
   if [[ -n ${V_DESC[k$v]+x} ]]; then RET=${V_DESC[k$v]}; return; fi
   sgr_parse "$v"
   if [[ -n $SGR_BAD ]]; then
@@ -4512,6 +4648,7 @@ cmd_edit() {
   load_config
   prepare_checks
   run_checks
+  style_detect
   OPT_COLOUR=always
   setup_colour
   setup_glyphs

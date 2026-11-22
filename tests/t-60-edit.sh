@@ -204,3 +204,21 @@ else
 fi
 run edit --help
 has "$OUT" "Usage: ls-colours-config.sh edit" "edit --help"
+
+group "edit: entries without a colour"
+OPT_CASE=0 ST=()
+read_file "$FIX/nocolour.dircolors"
+style_detect
+build_entries
+labels=" ${E_LABEL[*]} "
+has "$labels" " .rar " "an entry without a colour is listed"
+has "$labels" " DIR " "...also a file type"
+for i in "${!E_LABEL[@]}"; do [[ ${E_LABEL[i]} == .cpio ]] && e=$i; done
+entry_values "$e"
+describe_value "$EV_EFF"
+is "$RET" "no colour" "...and shown as no colour"
+is "${#EV_LIST[@]}" 1 "...with its empty value in the list of values"
+stage_value "$e" 32
+set_value "${E_LINES[e]# }" "${ST[${E_LINES[e]# }]}"
+is "${SRC[5]}" ".cpio 32   # keep me" "giving it a colour writes the value after the key"
+ST=()
