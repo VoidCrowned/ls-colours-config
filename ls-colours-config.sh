@@ -220,12 +220,12 @@ setup_colour() {
   esac
   if (( USE_COLOUR )); then
     C_B="${ESC}[1m" C_D="${ESC}[2m" C_R="${ESC}[31m" C_G="${ESC}[32m"
-    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_0="${ESC}[0m"
+    C_Y="${ESC}[33m" C_C="${ESC}[36m" C_U="${ESC}[4m" C_0="${ESC}[0m"
   else
-    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
+    C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_U="" C_0=""
   fi
 }
-C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_0=""
+C_B="" C_D="" C_R="" C_G="" C_Y="" C_C="" C_U="" C_0=""
 
 # paint CODE TEXT -> RET: TEXT wrapped in the SGR code, the way ls prints it.
 paint() {
@@ -4849,6 +4849,75 @@ Each command has more options: $PROG help COMMAND
 EOF
 }
 
+# help_term TEXT -> RET: TEXT in bold, the way man shows options, with the
+# upper-case placeholders (FILE, NAME, [OPTIONS]) underlined instead.
+help_term() {
+  local w out="" re='^([[(]*)([A-Z][A-Z_]+)([]),.]*)$'
+  local -a words=()
+  read -r -a words <<<"$1"
+  for w in "${words[@]}"; do
+    out+="${out:+ }"
+    if [[ $w =~ $re ]]; then
+      out+="${BASH_REMATCH[1]}$C_0$C_U${BASH_REMATCH[2]}$C_0$C_B${BASH_REMATCH[3]}"
+    else
+      out+=$w
+    fi
+  done
+  RET="$C_B$out$C_0"
+  RET=${RET//"$C_B$C_0"/}
+}
+
+# help_style: style a plain help page (stdin) the way man shows one: headings
+# and options in bold, placeholders underlined. Everything else, continuation
+# lines and prose, stays as it is.
+help_style() {
+  local line gap rest
+  local re_heading='^[^ ].*:$'
+  local re_item='^  ([^ ]+( [^ ]+)*)(   *)([^ ].*)$'
+  local re_opts='^  -[^ ]'
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line == 'Usage: '* ]]; then
+      help_term "${line#Usage: }"
+      printf '%sUsage:%s %s\n' "$C_B" "$C_0" "$RET"
+    elif [[ $line =~ $re_heading ]]; then
+      printf '%s%s%s\n' "$C_B" "$line" "$C_0"
+    elif [[ $line =~ $re_item ]]; then
+      gap=${BASH_REMATCH[3]} rest=${BASH_REMATCH[4]}
+      help_term "${BASH_REMATCH[1]}"
+      printf '  %s%s%s\n' "$RET" "$gap" "$rest"
+    elif [[ $line =~ $re_opts ]]; then
+      # a line of options without a description (re_item takes the others)
+      help_term "${line#  }"
+      printf '  %s\n' "$RET"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
+# help_show FUNCTION: print a help page; styled when colours are on, and in
+# a pager ($PAGER, else less) when it is longer than the terminal.
+help_show() {
+  local text
+  local -a rows=()
+  text=$("$1")
+  if (( USE_COLOUR )); then text=$(help_style <<<"$text"); fi
+  if [[ -t 1 ]]; then
+    term_size
+    mapfile -t rows <<<"$text"
+    if (( ${#rows[@]} >= ROWS )); then
+      if [[ -n ${PAGER:-} ]]; then
+        printf '%s\n' "$text" | sh -c "$PAGER"
+        return 0
+      elif command -v less >/dev/null 2>&1; then
+        printf '%s\n' "$text" | less -RX
+        return 0
+      fi
+    fi
+  fi
+  printf '%s\n' "$text"
+}
+
 main() {
   local cmd="" arg
   local -a positional=()
@@ -4898,11 +4967,11 @@ main() {
   fi
   if (( want_help )); then
     case $cmd in
-      check) help_check ;;
-      preview) help_preview ;;
-      fix)   help_fix ;;
-      edit)  help_edit ;;
-      *)     usage ;;
+      check) help_show help_check ;;
+      preview) help_show help_preview ;;
+      fix)   help_show help_fix ;;
+      edit)  help_show help_edit ;;
+      *)     help_show usage ;;
     esac
     exit 0
   fi

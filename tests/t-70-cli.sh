@@ -71,3 +71,43 @@ st() {
   st .bashrc 'export PATH=~/.dircolors:$PATH'
   is "$RET" "none" "the path on a line without dircolors does not count"
 }
+
+group "help pages look like a man page"
+B=$'\e[1m' U=$'\e[4m' Z=$'\e[0m'
+run --colour always --help
+has "$OUT" "${B}Commands:$Z" "headings are bold"
+has "$OUT" "${B}Usage:$Z" "...and so is Usage:"
+has "$OUT" "[$Z${U}FILE$Z$B]" "placeholders on the Usage line are underlined"
+has "$OUT" "  ${B}fix$Z       walk through" "command names are bold"
+has "$OUT" "  ${B}-n, --dry-run$Z" "options are bold"
+run --colour always help check
+has "$OUT" "  ${B}--term $Z${U}NAME$Z        judge" "an option's placeholder is underlined, not bold"
+has "$OUT" "$NL                     get no colour$NL" "continuation lines stay plain"
+run --help
+hasnt "$OUT" $'\e' "piped help has no escape codes"
+OPT_COLOUR=always; setup_colour
+is "$(printf 'Options:\n' | help_style)" "${B}Options:$Z" "help_style: heading"
+is "$(printf '  --scan DIR   text\n' | help_style)" "  ${B}--scan $Z${U}DIR$Z   text" "help_style: option with placeholder"
+is "$(printf '  --256, --term NAME\n' | help_style)" "  ${B}--256, --term $Z${U}NAME$Z" "help_style: line of options only"
+is "$(printf '               more text\n' | help_style)" "               more text" "help_style: continuation line"
+is "$(printf 'Some prose, with FILE in it.\n' | help_style)" "Some prose, with FILE in it." "help_style: prose"
+is "$(printf '  ~/.dir_colors, ~/.dircolors\n' | help_style)" "  ~/.dir_colors, ~/.dircolors" "help_style: indented text that is not an option"
+OPT_COLOUR=never; setup_colour
+if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+  printf '#!/bin/sh\necho PAGED\ncat >/dev/null\n' >"$WORK/pager"
+  chmod +x "$WORK/pager"
+  # paged ROWS ARGS...: run the script in a pseudo-terminal of ROWS rows
+  paged() {
+    local rows=$1; shift
+    OUT=$(SHELL=/bin/sh TERM=xterm timeout 20 script -qec "stty rows $rows cols 100; PAGER='$WORK/pager' '$BASH' '$SCRIPT' $*" /dev/null 2>&1 </dev/null)
+  }
+  paged 20 --help
+  has "$OUT" "PAGED" "a page longer than the terminal opens in \$PAGER"
+  paged 60 --help
+  hasnt "$OUT" "PAGED" "...a page that fits does not"
+  has "$OUT" "Commands:" "...and is printed"
+  paged 20 help check
+  hasnt "$OUT" "PAGED" "...help check fits in 20 rows"
+else
+  skip "help pager" "script is not available"
+fi
