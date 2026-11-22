@@ -5,6 +5,7 @@ run --version
 has "$OUT" "ls-colours-config.sh 0." "--version"
 run --help
 has "$OUT" "Usage: ls-colours-config.sh COMMAND" "--help"
+has "$OUT" "-n, --dry-run" "--help lists the dry run of fix and edit"
 run help fix
 has "$OUT" "Usage: ls-colours-config.sh fix" "help COMMAND"
 run

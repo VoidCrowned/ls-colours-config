@@ -948,14 +948,18 @@ startup_target() {
       norm=${line#"${line%%[![:space:]]*}"}
       [[ $norm == '#'* ]] && continue
       # Spell $HOME and $XDG_CONFIG_HOME out the way find_config sees them.
-      norm=" $norm "
-      norm=${norm//'${XDG_CONFIG_HOME:-$HOME/.config}'/$x}
-      norm=${norm//'${XDG_CONFIG_HOME:-~/.config}'/$x}
-      norm=${norm//'${XDG_CONFIG_HOME}'/$x}
-      norm=${norm//'$XDG_CONFIG_HOME'/$x}
-      norm=${norm//'${HOME}'/$HOME}
-      norm=${norm//'$HOME'/$HOME}
-      norm=${norm//[[:space:]\"\'=]~\//\ $HOME/}
+      # The single-quoted patterns are the literal text of the start-up file.
+      # shellcheck disable=SC2016
+      {
+        norm=" $norm "
+        norm=${norm//'${XDG_CONFIG_HOME:-$HOME/.config}'/$x}
+        norm=${norm//'${XDG_CONFIG_HOME:-~/.config}'/$x}
+        norm=${norm//'${XDG_CONFIG_HOME}'/$x}
+        norm=${norm//'$XDG_CONFIG_HOME'/$x}
+        norm=${norm//'${HOME}'/$HOME}
+        norm=${norm//'$HOME'/$HOME}
+        norm=${norm//[[:space:]\"\'=]~\//\ $HOME/}
+      }
       for p in "$x/dircolors" "$x/.dir_colors" "$HOME/.dir_colors" "$HOME/.dircolors"; do
         if [[ $norm == *"$p"[!A-Za-z0-9._/-]* ]]; then
           STARTUP_TARGET=$p STARTUP_FILE=$rc
@@ -4836,6 +4840,9 @@ Options for every command:
   --no-colour         the same as --colour never
   -h, --help          show help
   -V, --version       show the version
+
+Options for fix and edit:
+  -n, --dry-run       go through everything as usual, but never write
 
 Every option with "colour" in its name also accepts the spelling "color".
 Each command has more options: $PROG help COMMAND
