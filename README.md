@@ -31,7 +31,7 @@ ls-colours-config.sh COMMAND [OPTIONS] [FILE]
 | `sample` | print the built-in sample config |
 | `help` | show the help, or the help of a command: `help edit` |
 
-Without `FILE` it takes the first that exists of `$XDG_CONFIG_HOME/dircolors`, `$XDG_CONFIG_HOME/.dir_colors`, `~/.dir_colors` and `~/.dircolors`, or offers to create one from the [sample](examples/dircolors.sample). `ls-colours-config.sh help COMMAND` lists the options.
+Without `FILE` it takes the first that exists of `$XDG_CONFIG_HOME/dircolors`, `$XDG_CONFIG_HOME/.dir_colors`, `~/.dir_colors` and `~/.dircolors`, or offers to create one from the [sample](examples/dircolors.sample). If your `~/.bashrc`, `~/.zshrc` or `~/.profile` already loads one of these paths with `dircolors`, my tool creates the file there. `ls-colours-config.sh help COMMAND` lists the options.
 
 ## What it does to your file
 Nothing without your confirmation: you see the diff first, a backup is made next to the file, and lines it does not change stay byte for byte as they are.

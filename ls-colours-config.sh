@@ -932,11 +932,47 @@ find_config() {
   return 1
 }
 
+# startup_target: look through the shell start-up files for a dircolors line
+# that already loads one of the default locations (Ubuntu's ~/.bashrc loads
+# ~/.dircolors, for example). On a match set STARTUP_TARGET to that location
+# and STARTUP_FILE to the start-up file, and return 0. Only reads the files.
+startup_target() {
+  local x=${XDG_CONFIG_HOME:-$HOME/.config} rc line norm p
+  STARTUP_TARGET="" STARTUP_FILE=""
+  for rc in "$HOME/.bashrc" "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.profile"; do
+    [[ -r $rc && -f $rc ]] || continue
+    while IFS= read -r line || [[ -n $line ]]; do
+      # Only lines that run the dircolors command, not ones naming .dircolors.
+      [[ " $line " == *[!A-Za-z0-9._/-]dircolors[!A-Za-z0-9._/-]* ]] || continue
+      # Skip comments.
+      norm=${line#"${line%%[![:space:]]*}"}
+      [[ $norm == '#'* ]] && continue
+      # Spell $HOME and $XDG_CONFIG_HOME out the way find_config sees them.
+      norm=" $norm "
+      norm=${norm//'${XDG_CONFIG_HOME:-$HOME/.config}'/$x}
+      norm=${norm//'${XDG_CONFIG_HOME:-~/.config}'/$x}
+      norm=${norm//'${XDG_CONFIG_HOME}'/$x}
+      norm=${norm//'$XDG_CONFIG_HOME'/$x}
+      norm=${norm//'${HOME}'/$HOME}
+      norm=${norm//'$HOME'/$HOME}
+      norm=${norm//[[:space:]\"\'=]~\//\ $HOME/}
+      for p in "$x/dircolors" "$x/.dir_colors" "$HOME/.dir_colors" "$HOME/.dircolors"; do
+        if [[ $norm == *"$p"[!A-Za-z0-9._/-]* ]]; then
+          STARTUP_TARGET=$p STARTUP_FILE=$rc
+          return 0
+        fi
+      done
+    done <"$rc"
+  done
+  return 1
+}
+
 # offer_sample: no config exists; create one from the built-in sample if the
-# user agrees.
+# user agrees. Prefer the location a shell start-up file already loads.
 offer_sample() {
   local x=${XDG_CONFIG_HOME:-$HOME/.config} target answer
   target="$x/dircolors"
+  if startup_target; then target=$STARTUP_TARGET; fi
   err "no dircolors file found in the usual places:"
   err "  $x/dircolors, $x/.dir_colors, $HOME/.dir_colors, $HOME/.dircolors"
   if [[ ! -t 0 || ! -t 1 ]]; then
@@ -946,9 +982,14 @@ offer_sample() {
   printf 'Create %s from the built-in sample? [y/N] ' "$target"
   read -r answer || answer=""
   if [[ $answer != [yY]* ]]; then exit 1; fi
-  if ! mkdir -p -- "$x" || ! sample_config >"$target"; then
+  if ! mkdir -p -- "${target%/*}" || ! sample_config >"$target"; then
     err "could not write $target"
     exit 1
+  fi
+  FILE=$target
+  if [[ -n $STARTUP_FILE ]]; then
+    printf 'Created %s. %s already loads it: open a new shell to use it.\n\n' "$target" "$STARTUP_FILE"
+    return 0
   fi
   printf 'Created %s. To use it, add this line to your shell start-up file:\n' "$target"
   # The command substitution is text for the user to copy, not to be run here.
