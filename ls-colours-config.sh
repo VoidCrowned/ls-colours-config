@@ -2622,10 +2622,86 @@ review_and_save() {
   fi
   save_file || return 1
   printf 'Written. Backup of the old file: %s\n' "$BACKUP_PATH"
+  offer_reload
+  return 0
+}
+
+# offer_reload: after a write, load the new colours into the user's shell.
+# The tool cannot change the environment of the shell that started it, so the
+# shell-init wrapper passes a file in LSCC_RELOAD; whatever is written there
+# the wrapper sources after the tool has quit. Without the wrapper the eval
+# line is printed for the user to copy.
+offer_reload() {
+  local f=${LSCC_RELOAD:-} out
+  if [[ -n $f && -f $f && -w $f && ! -L $f ]]; then
+    if confirm "Load the new colours in this shell now?"; then
+      if out=$("$DC" -b -- "$FILE") && printf '%s\n' "$out" >"$f"; then
+        printf 'Loaded: the new colours apply in this shell from now on.\n'
+        return 0
+      fi
+      err "could not hand the colours over to the shell"
+    fi
+    reload_line
+    return 0
+  fi
+  reload_line
+  # The command substitution is text for the user to copy, not to be run here.
+  # shellcheck disable=SC2016
+  printf 'Tip: with eval "$(%s shell-init)" in ~/.bashrc or ~/.zshrc I can load them for you.\n' "$PROG"
+}
+
+reload_line() {
   # The command substitution is text for the user to copy, not to be run here.
   # shellcheck disable=SC2016
   printf 'Load the new colours with: eval "$(%s -b %s)"\n' "$DC" "$FILE"
-  return 0
+}
+
+# script_path -> RET: the absolute path of this script.
+script_path() {
+  local p=${BASH_SOURCE[0]} dir
+  # "bash NAME" looks in the current directory first, then in PATH
+  if [[ $p != */* && ! -f $p ]]; then
+    p=$(type -P -- "$p" 2>/dev/null || printf '%s' "$p")
+  fi
+  [[ $p == /* ]] || p=$PWD/$p
+  dir=$(cd -- "${p%/*}" 2>/dev/null && pwd -P) || dir=${p%/*}
+  RET=$dir/${p##*/}
+}
+
+help_shell_init() {
+  cat <<EOF
+Usage: $PROG shell-init
+
+Print a shell function for bash and zsh that wraps the tool. With it, fix
+and edit ask after writing whether to load the new colours in the shell you
+are in, so there is no eval line to copy.
+
+To switch it on, add this line to ~/.bashrc or ~/.zshrc and open a new shell:
+  eval "\$($PROG shell-init)"
+
+The function has the same name as the tool and runs this copy of it:
+$(script_path; printf '%s' "$RET")
+EOF
+}
+
+# cmd_shell_init: print the wrapper function. The tool hands the dircolors
+# output over in a private temporary file, which the function sources.
+cmd_shell_init() {
+  local q
+  script_path
+  q=${RET//\'/\'\\\'\'}
+  cat <<EOF
+# $PROG: load the new colours after fix or edit ($PROG help shell-init)
+$PROG() {
+  local lscc_f lscc_rc
+  lscc_f=\$(mktemp "\${TMPDIR:-/tmp}/lscc-reload.XXXXXX") || { '$q' "\$@"; return; }
+  LSCC_RELOAD=\$lscc_f '$q' "\$@"
+  lscc_rc=\$?
+  if [ -s "\$lscc_f" ]; then . "\$lscc_f"; fi
+  rm -f -- "\$lscc_f"
+  return "\$lscc_rc"
+}
+EOF
 }
 
 help_fix() {
@@ -5431,6 +5507,8 @@ Commands:
   edit      change colours in a full-screen editor
   fix       walk through the problems found by check and repair them
   sample    print the built-in sample config
+  shell-init  print a function for ~/.bashrc or ~/.zshrc that loads the
+            new colours after fix and edit: $PROG help shell-init
   help      show this help, or the help of a command: $PROG help edit
 
 FILE defaults to the first that exists of:
@@ -5576,6 +5654,7 @@ main() {
       preview) help_show help_preview ;;
       fix)   help_show help_fix ;;
       edit)  help_show help_edit ;;
+      shell-init) help_show help_shell_init ;;
       *)     help_show usage ;;
     esac
     exit 0
@@ -5590,6 +5669,7 @@ main() {
     preview) cmd_preview ;;
     fix)     cmd_fix ;;
     edit)    cmd_edit ;;
+    shell-init) cmd_shell_init ;;
     *)       die "unknown command: $cmd (try $PROG --help)" ;;
   esac
 }

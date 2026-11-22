@@ -29,9 +29,19 @@ ls-colours-config.sh COMMAND [OPTIONS] [FILE]
 | `fix` | walk through the problems found by `check` and repair them |
 | `edit` | change colours, add and delete entries in a full-screen editor (`?` lists the keys) |
 | `sample` | print the built-in sample config |
+| `shell-init` | print a shell function that loads the new colours after `fix` and `edit` |
 | `help` | show the help, or the help of a command: `help edit` |
 
 Without `FILE` it takes the first that exists of `$XDG_CONFIG_HOME/dircolors`, `$XDG_CONFIG_HOME/.dir_colors`, `~/.dir_colors` and `~/.dircolors`, or offers to create one from the [sample](examples/dircolors.sample). If your `~/.bashrc`, `~/.zshrc` or `~/.profile` already loads one of these paths with `dircolors`, my tool creates the file there. `ls-colours-config.sh help COMMAND` lists the options.
+
+## Load new colours straight away
+Add this line to `~/.bashrc` or `~/.zshrc` and open a new shell:
+
+```sh
+eval "$(ls-colours-config.sh shell-init)"
+```
+
+After `fix` or `edit` has written the file, my tool then asks whether to load the new colours in the shell you're in, so you don't have to copy the `eval` line.
 
 ## What it does to your file
 Nothing without your confirmation: you see the diff first, a backup is made next to the file, and lines it does not change stay byte for byte as they are.
