@@ -77,7 +77,7 @@ is "$TWIN_CONVENTION" 1 "upper-case twin convention detected"
 missing_of() { local i; RET="-"; for i in "${!M_PAT[@]}"; do [[ ${M_PAT[i]} == "$1" ]] && RET="${M_CAT[i]}|${M_VAL[i]}|${M_SRC[i]}"; done; }
 missing_of "*.rpm";    is "$RET" "archives|31|curated, database" "new archive takes the majority colour; both sources named"
 missing_of "*.opus";   is "$RET" "audio|00;36|curated, database" "no entries in the category: value from the database"
-missing_of "*.mp3";    is "$RET" "audio||curated" "no majority and no database value: nothing proposed"
+missing_of "*.mp3";    is "$RET" "audio|00|curated" "no majority and no database value: the default colour 00"
 missing_of "*.dbonly"; is "$RET" "other|01;33|database" "database-only entry"
 missing_of "*.tar";    is "$RET" "-" "existing entry is not missing"
 missing_of "*.png";    is "$RET" "-" "existing entry is not missing (twin)"
@@ -94,7 +94,7 @@ scan_dir "$WORK/scan"
 is "${SCAN_EXT[*]}" "*.qq *.xyz" "--scan finds the extensions without a colour"
 is "${SCAN_COUNT[*.xyz]}" 2 "--scan counts files regardless of case"
 find_missing
-missing_of "*.xyz"; is "$RET" "other||scan" "scan result is a suggestion with its source"
+missing_of "*.xyz"; is "$RET" "other|00|scan" "scan result is a suggestion with its source, as 00"
 SCAN_EXT=() SCAN_COUNT=()
 
 group "check: command"

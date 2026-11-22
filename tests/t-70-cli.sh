@@ -39,3 +39,30 @@ OUT=$(HOME=$home XDG_CONFIG_HOME="$home/xdg" "$BASH" "$SCRIPT" check --term xter
 has "$OUT" "$home/xdg/.dir_colors" "\$XDG_CONFIG_HOME is honoured"
 OUT=$(HOME=$home XDG_CONFIG_HOME="$home/xdg" "$BASH" "$SCRIPT" check --term xterm --ignore missing "$ROOT/examples/dircolors.sample" </dev/null 2>&1)
 has "$OUT" "examples/dircolors.sample" "a file argument wins over the default locations"
+
+group "start-up file decides where a new config goes (#7)"
+# st RCNAME CONTENT: write CONTENT to a fresh home's start-up file RCNAME, run
+# startup_target there; sets RET to "TARGET|FILE" or "none".
+st() {
+  local h="$WORK/st.$RANDOM"
+  mkdir -p "$h"
+  printf '%s\n' "$2" >"$h/$1"
+  RET=$(HOME=$h XDG_CONFIG_HOME="" ZDOTDIR=""
+        if startup_target; then printf '%s|%s' "${STARTUP_TARGET#"$h"}" "${STARTUP_FILE#"$h"}"; else printf none; fi)
+}
+st .bashrc '    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"'
+is "$RET" "/.dircolors|/.bashrc" "Ubuntu's default .bashrc: ~/.dircolors"
+st .zshrc 'eval "$(dircolors -b $HOME/.dir_colors)"'
+is "$RET" "/.dir_colors|/.zshrc" ".zshrc with \$HOME"
+st .bashrc 'eval "$(dircolors -b "${XDG_CONFIG_HOME:-$HOME/.config}/dircolors")"'
+is "$RET" "/.config/dircolors|/.bashrc" "XDG spelling"
+st .profile 'eval "$(dircolors -b ${HOME}/.dircolors)"'
+is "$RET" "/.dircolors|/.profile" ".profile with \${HOME}"
+st .bashrc '# eval "$(dircolors -b ~/.dircolors)"'
+is "$RET" "none" "a commented-out line does not count"
+st .bashrc 'eval "$(dircolors -b ~/.dircolors.bak)"'
+is "$RET" "none" "a different file name does not count"
+st .bashrc 'eval "$(dircolors -b)"'
+is "$RET" "none" "dircolors without a file does not count"
+st .bashrc 'export PATH=~/.dircolors:$PATH'
+is "$RET" "none" "the path on a line without dircolors does not count"
