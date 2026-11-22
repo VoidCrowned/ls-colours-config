@@ -1891,8 +1891,9 @@ style_detect() {
 
 # --- step 1: entries without a colour ----------------------------------------
 
-# propose_value LINE -> RET: a colour for a line that has none (empty if
-# there is nothing to propose), RET2: where it comes from.
+# propose_value LINE -> RET: a colour for a line that has none, RET2: where
+# it comes from. With nothing better it is 00, the terminal's default colour.
+# Empty for lines that are not colour entries.
 propose_value() {
   local i=$1 p=${L_NORM[$1]}
   RET="" RET2=""
@@ -1905,10 +1906,14 @@ propose_value() {
       elif [[ -n ${DB_VAL[$p]:-} ]]; then
         RET=${DB_VAL[$p]} RET2="system database"
       else
-        RET=""
+        RET=00 RET2="default colour, nothing else to go by"
       fi ;;
     type)
-      [[ -n ${DB_TYPE[$p]:-} ]] && RET=${DB_TYPE[$p]} RET2="system database" ;;
+      if [[ -n ${DB_TYPE[$p]:-} ]]; then
+        RET=${DB_TYPE[$p]} RET2="system database"
+      else
+        RET=00 RET2="default colour, nothing else to go by"
+      fi ;;
   esac
 }
 
@@ -1950,10 +1955,7 @@ fix_novalue() {
       printf '    line %-4s %-10s ->  %-9s %s  %s(%s)%s%s\n' "$i" "${L_KEY[i]}" "${vals[k]}" "$RET" "$C_D" "$RET2" "$C_0" "$sec"
     else
       none=$(( none + 1 ))
-      case ${L_KIND[i]} in
-        pattern|type) printf '    line %-4s %-10s ->  no colour to propose%s\n' "$i" "${L_KEY[i]}" "$sec" ;;
-        *)            printf '    line %-4s %-10s ->  not a colour entry: delete it or correct it by hand\n' "$i" "${L_KEY[i]}" ;;
-      esac
+      printf '    line %-4s %-10s ->  not a colour entry: delete it or correct it by hand\n' "$i" "${L_KEY[i]}"
     fi
   done
   ask "  Fix them? [a = give each the proposed colour, e = choose per entry, d = delete them all, Enter = none]"
@@ -1963,7 +1965,7 @@ fix_novalue() {
         [[ -n ${vals[k]} ]] || continue
         set_value "${lines[k]}" "${vals[k]}"; n=$(( n + 1 ))
       done
-      (( none )) && printf '  %d lines have no colour to propose and stay as they are; run fix again and choose e.\n' "$none" ;;
+      (( none )) && printf '  %d lines are not colour entries and stay as they are; run fix again and delete them with d.\n' "$none" ;;
     d|D)
       for i in "${lines[@]}"; do delete_line "$i"; gone=$(( gone + 1 )); done ;;
     e|E)
