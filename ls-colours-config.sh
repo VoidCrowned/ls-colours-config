@@ -1213,11 +1213,12 @@ find_missing() {
   for p in "${order[@]}"; do
     cat=${CUR_CAT[$p]:-${DB_CAT[$p]:-}}
     [[ -n $cat ]] || cat=other
-    val="" why="no colour to propose"
     if [[ -n ${CAT_MAJ[$cat]:-} ]]; then
       val=${CAT_MAJ[$cat]} why="most of your $cat entries have this colour"
     elif [[ -n ${DB_VAL[$p]:-} ]]; then
       val=${DB_VAL[$p]} why="value from the system database"
+    else
+      val=00 why="default colour, nothing else to go by"
     fi
     M_PAT+=("$p") M_CAT+=("$cat") M_SRC+=("${src[$p]}") M_VAL+=("$val") M_WHY+=("$why")
   done
@@ -1494,7 +1495,7 @@ run_checks() {
       x=${x//, /}
       list+="${list:+ }${RET}[$x]"
       total=$(( total + 1 ))
-      [[ -n ${M_VAL[i]} ]] && n=$(( n + 1 ))
+      [[ ${M_WHY[i]} == default* ]] || n=$(( n + 1 ))
     done
     (( total )) || continue
     if [[ -n ${CAT_MAJ[$cat]:-} ]]; then
@@ -1502,9 +1503,9 @@ run_checks() {
     elif (( n == total )); then
       fix="fix offers to add them with the values of the system database."
     elif (( n )); then
-      fix="fix offers to add the $n that have a value in the system database; for the others there is no colour to propose."
+      fix="fix offers to add them with the values of the system database, and as 00 (the default colour) the $(( total - n )) that have none there."
     else
-      fix="fix proposes nothing: your $cat entries have no majority colour and the system database has no value."
+      fix="fix offers to add them as 00, the default colour: your $cat entries have no majority colour and the system database has no value."
     fi
     add_finding info missing 0 "$total \"$cat\" patterns have no colour: $list" \
       "Files with these names are listed in the default colour." "$fix"
@@ -2311,7 +2312,7 @@ queue_missing() {
 
 fix_missing() {
   local -a chosen=() cats=()
-  local cat i n none line tag stop=0
+  local cat i n ndef line tag stop=0
   step 5 "missing entries"
   style_detect
   if (( ! ${#MT_CODE[@]} && ! ${#M_PAT[@]} )); then
@@ -2323,7 +2324,7 @@ fix_missing() {
     printf '\n  Patterns without a colour, shown in the colour they would get.\n'
     printf '  %sSources: [c] built-in table, [d] dircolors --print-database, [s] --scan%s\n' "$C_D" "$C_0"
     for cat in $CAT_ORDER other; do
-      line="" none="" n=0
+      line="" n=0 ndef=0
       for i in "${!M_PAT[@]}"; do
         [[ ${M_CAT[i]} == "$cat" ]] || continue
         pattern_key "${M_PAT[i]}"
@@ -2332,30 +2333,23 @@ fix_missing() {
         tag=${tag//database/d}
         tag=${tag//scan/s}
         tag=${tag//, /}
-        if [[ -n ${M_VAL[i]} ]]; then
-          n=$(( n + 1 ))
-          paint "${M_VAL[i]}" "$RET"
-          line+="$RET${C_D}[$tag]$C_0 "
-        else
-          none+="${RET}[$tag] "
-        fi
+        n=$(( n + 1 ))
+        [[ ${M_WHY[i]} == default* ]] && ndef=$(( ndef + 1 ))
+        paint "${M_VAL[i]}" "$RET"
+        line+="$RET${C_D}[$tag]$C_0 "
       done
-      [[ -n $line$none ]] || continue
-      if (( n )); then
-        cats+=("$cat")
-        if [[ -n ${CAT_MAJ[$cat]:-} ]]; then
-          printf '\n  %s%s%s as %s, the colour most of your %s entries have:\n' "$C_B" "$cat" "$C_0" "${CAT_MAJ[$cat]}" "$cat"
-        else
-          printf '\n  %s%s%s with the values of the system database:\n' "$C_B" "$cat" "$C_0"
-        fi
-        printf '    %s\n' "$line"
+      (( n )) || continue
+      cats+=("$cat")
+      if [[ -n ${CAT_MAJ[$cat]:-} ]]; then
+        printf '\n  %s%s%s as %s, the colour most of your %s entries have:\n' "$C_B" "$cat" "$C_0" "${CAT_MAJ[$cat]}" "$cat"
+      elif (( ndef == n )); then
+        printf '\n  %s%s%s as 00, the default colour (no majority among your %s entries, nothing in the database):\n' "$C_B" "$cat" "$C_0" "$cat"
+      elif (( ndef )); then
+        printf '\n  %s%s%s with the values of the system database, or 00 (the default colour) where it has none:\n' "$C_B" "$cat" "$C_0"
       else
-        printf '\n  %s%s%s\n' "$C_B" "$cat" "$C_0"
+        printf '\n  %s%s%s with the values of the system database:\n' "$C_B" "$cat" "$C_0"
       fi
-      if [[ -n $none ]]; then
-        printf '    %sno colour to propose (no majority among your %s entries, nothing in the database):%s\n' "$C_D" "$cat" "$C_0"
-        printf '    %s%s%s\n' "$C_D" "$none" "$C_0"
-      fi
+      printf '    %s\n' "$line"
     done
     if (( ${#cats[@]} )); then
       printf '\n'
@@ -2647,8 +2641,9 @@ and nothing is written until you have seen the complete diff and confirmed.
                       entries of their category have; change all, some
                       or none
   5. missing entries  add common patterns in the colour most entries of
-                      their category have; accept all, per category or
-                      per entry
+                      their category have, else the system database
+                      value, else 00 (the default colour); accept all,
+                      per category or per entry
   6. reorganise       group patterns by category and sort the sections
 
 Before writing, a backup named FILE.bak-DATE-TIME is created next to the
