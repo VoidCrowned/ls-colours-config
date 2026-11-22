@@ -1,5 +1,9 @@
 # shell-init: load the new colours into the calling shell after a write (#4).
 
+# The tests look for literal $(...) text and pass shell code to bash -c and
+# zsh -c, so single quotes are meant.
+# shellcheck disable=SC2016
+
 group "shell-init: the wrapper function (#4)"
 real="$(cd "$ROOT" && pwd -P)/ls-colours-config.sh"
 run shell-init
