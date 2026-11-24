@@ -82,6 +82,10 @@ CUR_ID="h:35"; place_cursor
 add_entry .gif
 e=$RET
 is "${E_SEC[e]}|$(sed -n '$p' <<<"$(doc_print)")" "images|.GIF 35" "in the palette view a new entry gets the colour under the cursor, in the section of its category"
+CUR_ID="h:35"; place_cursor
+add_entry .mp3
+e=$RET
+is "${E_SEC[e]}|$(tail -n 4 <<<"$(doc_print)")" "audio|${NL}# audio${NL}.mp3 35${NL}.MP3 35" "...and a category without a section gets one of its own"
 T_VIEW=section
 
 group "edit: new sections"
@@ -135,6 +139,17 @@ add_entry .webp; e=$RET
 delete_entries " $e"
 is "$DROPPED|$(doc_print)|${#GONE[@]}" "1|$ORIG_PAIRS|0" "D on a new entry takes it out at once"
 
+struct_state pairs.dircolors
+OPT_CASE=1; build_entries
+entry_named ".gz"; delete_entries " $RET"
+OPT_CASE=0; build_entries; build_rows
+entry_named ".gz / .GZ"; entry_state "$RET"
+is "$RET" part "an entry of which c had one spelling deleted is partly deleted"
+OPT_ASCII=1; setup_glyphs
+rows 80 8
+has "$RET" ".gz / .GZ             - one spelling deleted" "...and says so in the list"
+GONE=(); build_rows
+
 group "edit: undo all"
 struct_state pairs.dircolors
 F_LINE=(6) F_WHAT=(".zip is odd"); F_LINE0=(6)
@@ -160,6 +175,10 @@ build_rows
 rows 60 8
 has "$RET" "example.webp      .webp / .WEBP   + red" "a new entry is marked with +"
 has "$RET" "example.gz        .gz / .GZ       - deleted" "a deleted one with - and the word"
+F_LINE=(5) F_WHAT=(".GZ is odd"); map_findings; build_rows
+rows 60 8
+has "$RET" "     example.gz        .gz / .GZ       - deleted" "...without the mark of check's findings"
+F_LINE=() F_WHAT=(); map_findings
 has "$RET" "archives     3   red" "...and the heading counts only the entries that stay"
 entry_named ".png / .PNG"; a=$RET; entry_named ".jpg"; delete_entries " $a $RET"; build_rows
 rows 60 10

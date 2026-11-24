@@ -3470,6 +3470,8 @@ row_text() {
     else describe_value "$EV_EFF"; body=$RET
     fi
     pre_p="+ " pre_o="${C_B}${C_G}+${C_0} "
+  elif [[ $E_ST == part ]]; then
+    pre_p="- " pre_o="${C_B}${C_R}-${C_0} " body="one spelling deleted" bc=$C_D
   elif [[ $T_VIEW == palette ]]; then
     # the group says the colour; the row says where the entry lives
     body=${E_SEC[$1]} bc=$C_D
@@ -3488,7 +3490,7 @@ row_text() {
   # cut to LIMIT from the end; every part keeps its colour, so a change
   # stays marked also in a narrow pane (with the picker open)
   if (( ${#pre_p} > limit )); then
-    case $E_ST in gone) t=$C_R ;; added) t=$C_G ;; *) t=$C_Y ;; esac
+    case $E_ST in gone|part) t=$C_R ;; added) t=$C_G ;; *) t=$C_Y ;; esac
     RET="${C_B}$t${pre_p:0:limit}${C_0}" RET2=$limit
     return
   fi
@@ -3586,7 +3588,7 @@ render_list() {
     (( idx == T_CUR && ! LIST_DIM )) && label="${C_B}$label${C_0}"
     if (( LIST_DIM )) || [[ $E_ST == gone ]]; then label="${C_D}$label${C_0}"; fi
     warn=" "
-    [[ -n ${E_WARN[ref]:-} ]] && warn="${C_Y}$GL_WARN${C_0}"
+    [[ -n ${E_WARN[ref]:-} && $E_ST != gone ]] && warn="${C_Y}$GL_WARN${C_0}"
     LP_TXT[r]="$gutter  $warn $cell$pad1  $label$pad2  $RET"
     # shellcheck disable=SC2034
     LP_LEN[r]=$(( wn + wl + 9 + RET2 ))
@@ -4376,37 +4378,37 @@ open_picker() {
 # shift_lines FROM DELTA: what is kept by line number follows the lines from
 # FROM on, after DELTA lines were put in front of them (negative: taken out).
 shift_lines() {
-  local from=$1 d=$2 i
+  local start=$1 delta=$2 i
   local -a st=() ad=() go=()
   for i in "${!ST[@]}"; do
-    if (( i >= from )); then st[i+d]=${ST[i]}; else st[i]=${ST[i]}; fi
+    if (( i >= start )); then st[i+delta]=${ST[i]}; else st[i]=${ST[i]}; fi
   done
   for i in "${!ADDED[@]}"; do
-    if (( i >= from )); then ad[i+d]=1; else ad[i]=1; fi
+    if (( i >= start )); then ad[i+delta]=1; else ad[i]=1; fi
   done
   for i in "${!GONE[@]}"; do
-    if (( i >= from )); then go[i+d]=1; else go[i]=1; fi
+    if (( i >= start )); then go[i+delta]=1; else go[i]=1; fi
   done
   ST=() ADDED=() GONE=()
   for i in "${!st[@]}"; do ST[i]=${st[i]}; done
   for i in "${!ad[@]}"; do ADDED[i]=1; done
   for i in "${!go[@]}"; do GONE[i]=1; done
   for i in "${!F_LINE[@]}"; do
-    if (( F_LINE[i] >= from )); then F_LINE[i]=$(( F_LINE[i] + d )); fi
+    if (( F_LINE[i] >= start )); then F_LINE[i]=$(( F_LINE[i] + delta )); fi
   done
 }
 
 # doc_insert AFTER TEXT -> RET: the lines of TEXT go into the document after
 # line AFTER (0: at the top), marked as added; RET is the first of them.
 doc_insert() {
-  local at=$1 i
+  local after=$1 i
   local -a lines=()
   mapfile -t lines <<<"$2"
-  shift_lines "$(( at + 1 ))" "${#lines[@]}"
-  insert_after "$at" "$2"
+  shift_lines "$(( after + 1 ))" "${#lines[@]}"
+  insert_after "$after" "$2"
   doc_rebuild
-  for (( i = at + 1; i <= at + ${#lines[@]}; i++ )); do ADDED[i]=1; done
-  RET=$(( at + 1 ))
+  for (( i = after + 1; i <= after + ${#lines[@]}; i++ )); do ADDED[i]=1; done
+  RET=$(( after + 1 ))
 }
 
 # doc_remove LINES: take lines out of the document.
@@ -4439,7 +4441,7 @@ key_lines() {
 entry_all() {
   local first=${E_LINES[$1]# } kind=pattern
   first=${first%% *}
-  [[ ${L_KIND[first]} == type ]] && kind=type
+  [[ ${L_KIND[first]} == type ]] && kind="type"
   key_lines "$kind" "${L_NORM[first]}"
 }
 
@@ -4455,15 +4457,16 @@ entry_of() {
 }
 
 # entry_state ENTRY -> RET: added (new in this run), gone (marked for
-# deletion) or empty.
+# deletion), part (some of its lines are, after c joined a case pair again)
+# or empty.
 entry_state() {
-  local i all=1
+  local i all=1 some=0
   RET=""
   for i in ${E_LINES[$1]}; do
     if [[ -n ${ADDED[i]:-} ]]; then RET=added; return; fi
-    [[ -n ${GONE[i]:-} ]] || all=0
+    if [[ -n ${GONE[i]:-} ]]; then some=1; else all=0; fi
   done
-  if (( all )); then RET=gone; fi
+  if (( all )); then RET=gone; elif (( some )); then RET=part; fi
 }
 
 # live_entries ENTRIES -> RET: those not marked for deletion.
@@ -4547,10 +4550,10 @@ cursor_title() {
 # title of its section; NP_GAP is 1 when an empty line has to follow it.
 # A pattern goes to the end of the section the cursor is in, or with the
 # cursor elsewhere to the section of its category. Fails with T_MSG.
-NP_GAP=0
+NP_GAP=0 NP_CAT=""
 new_place() {
   local norm=$2 title i s pos=0 posu=0
-  NP_GAP=0
+  NP_GAP=0 NP_CAT=""
   if [[ $1 == type ]]; then
     for s in "${!TYPE_LINES[@]}"; do
       for i in ${TYPE_LINES[$s]}; do (( i > pos )) && pos=$i; done
@@ -4577,10 +4580,12 @@ new_place() {
       for s in "${!SEC_TITLE[@]}"; do
         if (( s )) && [[ ${SEC_CAT[s]} == "$RET" ]]; then title=${SEC_TITLE[s]}; break; fi
       done
+      # a category without a section of its own: add_entry starts one
+      [[ -n $title ]] || NP_CAT=$RET
     fi
   fi
   if [[ -z $title ]]; then
-    T_MSG="Which section? Put the cursor in the one it belongs in, or start a new one with N."
+    [[ -n $NP_CAT ]] || T_MSG="Which section? Put the cursor in the one it belongs in, or start a new one with N."
     return 1
   fi
   for (( i = 1; i <= N; i++ )); do
@@ -4631,14 +4636,20 @@ new_lines() {
   fi
 }
 
-# add_entry KEY -> RET: the new entry, with the cursor on it. Fails with T_MSG.
+# add_entry KEY -> RET: the new entry, with the cursor on it. A pattern of a
+# category that has no section yet starts one named after the category.
+# Fails with T_MSG.
 add_entry() {
   local key norm at title text
   new_key "$1" || return 1
   key=$RET norm=$RET2
   key_lines "$NK_KIND" "$norm"
   if [[ -n $RET ]]; then known_key "$key" "$RET"; return 1; fi
-  new_place "$NK_KIND" "$norm" || return 1
+  if ! new_place "$NK_KIND" "$norm"; then
+    [[ -n $NP_CAT ]] || return 1
+    add_section "$NP_CAT" "$key"
+    return
+  fi
   at=$RET title=$RET2
   new_value "$NK_KIND" "$norm" "$title"
   new_lines "$key" "$RET" "$norm"
@@ -4723,7 +4734,7 @@ add_section() {
 # drop_added LINES: take added lines out again. A section that was added in
 # this run goes with its last entry, with the empty lines around it.
 drop_added() {
-  local i s h j k
+  local i s h j k m
   local -A drop=() left=()
   for i in $1; do drop[$i]=1; done
   for (( i = 1; i <= N; i++ )); do
@@ -4745,11 +4756,11 @@ drop_added() {
     done
     # the empty lines after it only when they came with it: neither the
     # line in front of the section nor the one after them is new
-    for (( i = k; i <= N; i++ )); do
-      [[ -n ${ADDED[i]:-} && ${L_KIND[i]} == blank ]] || break
+    for (( m = k; m <= N; m++ )); do
+      [[ -n ${ADDED[m]:-} && ${L_KIND[m]} == blank ]] || break
     done
-    if (( i > k )) && [[ -z ${ADDED[j]:-} ]] && { (( i > N )) || [[ -z ${ADDED[i]:-} ]]; }; then
-      for (( ; k < i; k++ )); do drop[$k]=1; done
+    if (( m > k )) && [[ -z ${ADDED[j]:-} ]] && { (( m > N )) || [[ -z ${ADDED[m]:-} ]]; }; then
+      for (( ; k < m; k++ )); do drop[$k]=1; done
     fi
   done
   doc_remove "${!drop[*]}"
@@ -4786,7 +4797,7 @@ gone_headings() {
 # counts the entries.
 DROPPED=0
 delete_entries() {
-  local e i n=0 drop=""
+  local e i n=0 out=""
   DROPPED=0
   for e in $1; do
     entry_state "$e"
@@ -4794,10 +4805,10 @@ delete_entries() {
     n=$(( n + 1 ))
     entry_all "$e"
     for i in $RET; do
-      if [[ -n ${ADDED[i]:-} ]]; then drop+=" $i"; else GONE[i]=1; unset "ST[$i]"; fi
+      if [[ -n ${ADDED[i]:-} ]]; then out+=" $i"; else GONE[i]=1; unset "ST[$i]"; fi
     done
   done
-  if [[ -n $drop ]]; then drop_added "$drop"; DROPPED=1; fi
+  if [[ -n $out ]]; then drop_added "$out"; DROPPED=1; fi
   gone_headings
   (( DROPPED )) && build_entries
   RET=$n
@@ -4807,19 +4818,19 @@ delete_entries() {
 # for deletion go, added entries are taken out again (DROPPED is then 1).
 # RET counts the entries that changed.
 undo_entries() {
-  local e i n=0 hit drop=""
+  local e i n=0 hit out=""
   DROPPED=0
   for e in $1; do
     hit=0
     entry_all "$e"
     for i in $RET; do
-      if [[ -n ${ADDED[i]:-} ]]; then drop+=" $i"; hit=1; continue; fi
+      if [[ -n ${ADDED[i]:-} ]]; then out+=" $i"; hit=1; continue; fi
       if [[ -n ${ST[i]+x} ]]; then unset "ST[$i]"; hit=1; fi
       if [[ -n ${GONE[i]:-} ]]; then unset "GONE[$i]"; hit=1; fi
     done
     n=$(( n + hit ))
   done
-  if [[ -n $drop ]]; then drop_added "$drop"; DROPPED=1; fi
+  if [[ -n $out ]]; then drop_added "$out"; DROPPED=1; fi
   gone_headings
   (( DROPPED )) && build_entries
   RET=$n

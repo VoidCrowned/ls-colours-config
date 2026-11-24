@@ -227,6 +227,8 @@ else
 fi
 run edit --help
 has "$OUT" "Usage: ls-colours-config.sh edit" "edit --help"
+has "$OUT" "n to add an entry, N to add a section, D to delete an entry" "...names the keys for new and deleted entries"
+hasnt "$OUT" "edit only changes entries that exist" "...and no longer says edit cannot add entries"
 
 group "edit: entries without a colour"
 OPT_CASE=0 ST=()
