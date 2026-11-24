@@ -27,7 +27,7 @@ ls-colours-config.sh COMMAND [OPTIONS] [FILE]
 | `preview` | list one sample per entry with the real `ls`, then run `check` |
 | `check` | report problems in the file (exit status 1 when there are any) |
 | `fix` | walk through the problems found by `check` and repair them |
-| `edit` | change colours in a full-screen editor (`?` lists the keys) |
+| `edit` | change colours, add and delete entries in a full-screen editor (`?` lists the keys) |
 | `sample` | print the built-in sample config |
 | `help` | show the help, or the help of a command: `help edit` |
 

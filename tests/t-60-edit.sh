@@ -199,6 +199,29 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   fresh pairs.dircolors
   tui "$F" -- 'v' 'q'
   is "$RC" 0 "q quits from the palette view, as in the section view"
+
+  # n, a pattern, Enter; Enter in the picker keeps the proposed colour; save
+  fresh pairs.dircolors
+  tui "$F" -- 'n' '.webp' '\r' '\r' 's' 'y\n'
+  is "$(sed -n 7,8p "$F")" ".webp 31${NL}.WEBP 31" "n adds an entry to the section under the cursor and saves it"
+  has "$OUT" "new entry (" "...after asking for it on the message row"
+  # D on .gz / .GZ, save
+  fresh pairs.dircolors
+  tui "$F" -- 'j' 'D' 's' 'y\n'
+  is "$(sed -n 2,4p "$F")|$(sed -n 5p "$F")" ".tar 31${NL}.TAR 31${NL}.zip 31|" "D deletes both lines of a pair on saving"
+  # N: title, first entry, keep the colour, save
+  fresh pairs.dircolors
+  tui "$F" -- 'N' 'music' '\r' '.flac' '\r' '\r' 's' 'y\n'
+  is "$(sed -n 7,10p "$F" | cut -d ' ' -f 1)|$(sed -n 8p "$F")" "${NL}#${NL}.flac${NL}.FLAC|# music" "N adds a section with its first entry"
+  # a declined save keeps the new entry; the second save writes it
+  fresh pairs.dircolors
+  tui "$F" -- 'n' '.webp' '\r' '\r' 's' 'n\n' '\r' 's' 'y\n'
+  is "$(sed -n 7p "$F")" ".webp 31" "a new entry survives a declined save"
+  fresh pairs.dircolors
+  before=$(cat "$F")
+  tui "$F" -- 'n' '.webp' '\r' '\r' 'q' 'y'
+  has "$OUT" "2 unsaved changes. Quit without saving?" "q asks when only new entries are unsaved"
+  is "$(cat "$F")" "$before" "...and y quits without writing"
 else
   skip "editor in a pseudo-terminal" "needs the script command"
 fi
