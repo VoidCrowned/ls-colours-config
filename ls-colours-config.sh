@@ -2689,7 +2689,9 @@ cmd_fix() {
 declare -a E_LABEL=() E_NAME=() E_LINES=() E_SEC=()
 declare -a ROW_KIND=() ROW_REF=()    # visible rows: h heading (group), e entry
 declare -a ST=()                     # staged values by line number
-declare -a EV_LIST=()                # distinct values of the entry at hand
+declare -a ADDED=() GONE=()          # by line number: lines new in this run, lines marked for deletion
+declare -a F_LINE0=()                # the lines of the findings as the editor started
+declare -a EV_LIST=()              # distinct values of the entry at hand
 EV_EFF="" EV_MOD=0
 T_CUR=0 T_TOP=0 T_FILTER="" T_MSG="" RESIZED=0 INTR=0 KEY=""
 T_RAW=0            # x: show codes instead of descriptions
@@ -2882,7 +2884,7 @@ build_entries() {
 #
 # The entries are shown in groups: the sections of the file. A group is a
 # heading row that can be folded away, followed by its entries.
-declare -a G_TITLE=() G_ENTRIES=() G_N=() G_MAJ=() G_DIFF=() G_WARN=()
+declare -a G_TITLE=() G_ENTRIES=() G_N=() G_MAJ=() G_DIFF=() G_WARN=() G_GONE=()
 declare -a E_GRP=() E_ORD=() E_WARN=()
 declare -A FOLD=() FOLD_F=()         # fold state by view and title; _F while a filter is on
 T_VIEW=section T_FOLD_DEFAULT=0 T_TOTAL=0 GW_TITLE=8
@@ -2974,11 +2976,15 @@ group_name() {
 }
 
 # summarise GROUP: the colour most entries of the group have (G_MAJ), how
-# many have another one (G_DIFF), and how many check complains about.
+# many have another one (G_DIFF), how many check complains about, and how
+# many are marked for deletion (G_GONE; the others leave them out).
 summarise() {
-  local g=$1 i key best="" bestn=0 total=0 warn=0
+  local g=$1 i key best="" bestn=0 total=0 warn=0 gone=0
   local -A tally=() spelt=()
   for i in ${G_ENTRIES[g]}; do
+    # entries marked for deletion count apart
+    entry_state "$i"
+    if [[ $RET == gone ]]; then gone=$(( gone + 1 )); continue; fi
     entry_values "$i"
     same_colour "$EV_EFF"
     key=k$RET
@@ -2988,7 +2994,7 @@ summarise() {
     total=$(( total + 1 ))
     [[ -n ${E_WARN[i]:-} ]] && warn=$(( warn + 1 ))
   done
-  G_N[g]=$total G_MAJ[g]=${spelt[$best]:-} G_DIFF[g]=$(( total - bestn )) G_WARN[g]=$warn
+  G_N[g]=$total G_MAJ[g]=${best:+${spelt[$best]}} G_DIFF[g]=$(( total - bestn )) G_WARN[g]=$warn G_GONE[g]=$gone
 }
 
 # is_folded GROUP. A search starts with every group that matches unfolded.
@@ -3291,9 +3297,11 @@ hdr_join() {
 declare -a HEAD_TXT=() HP_NAME=() HP_ROW=() HP_GO=()
 HEAD_H=1
 render_header() {
-  local w=$1 file=$FILE n=${#ST[@]} tail ctail tw drop room lw pad t1 t2 big="   $GL_DOT   "
+  local w=$1 file=$FILE n tail ctail tw drop room lw pad t1 t2 big="   $GL_DOT   "
   # a file under the home folder as ~/...
   [[ -n ${HOME:-} && $HOME != / && $file == "$HOME"/* ]] && file="~${file#"$HOME"}"
+  unsaved
+  n=$RET
   tail="$n unsaved"
   tw=$(( ${#tail} + (${#n} < 3 ? 3 - ${#n} : 0) ))
   if (( n )); then ctail="${C_B}${C_Y}$tail${C_0}"; else ctail="${C_D}$tail${C_0}"; fi
@@ -3378,8 +3386,8 @@ render_footer() {
                    "$GL_K_SPACE|choose" "$GL_K_ENTER|accept" "r|reset" "e|type code" "Esc/q|cancel") ;;
     prompt) hints=("$GL_K_ENTER|apply" "Esc|cancel") ;;
     help)   hints=("$GL_K_MOVE|scroll" "any other key|back") ;;
-    *)      hints=("?|help" "$GL_K_ARROWS|move" "/|search" "+"
-                   "$GL_K_ENTER|edit" "s|save" "q|quit" ""
+    *)      hints=("?|help" "$GL_K_ARROWS|move" "/|search" "" "s|save" "q|quit" "+"
+                   "$GL_K_ENTER|edit" "n|new" "N|new section" "D|delete" ""
                    "y|copy" "p|paste" "d|clear" "u|undo" "U|undo all" "+"
                    "v|view" "x|codes" "$GL_K_SPACE|fold" "z|fold all" "Z|unfold all" "c|case pairs") ;;
   esac
@@ -3447,11 +3455,24 @@ render_footer() {
 }
 
 # row_text REF LIMIT -> RET text, RET2 its width: what stands behind the
-# pattern of an entry. Needs entry_values to have run for the entry.
+# pattern of an entry. Needs entry_values and entry_state (in E_ST) to have
+# run for the entry.
+E_ST=""
 row_text() {
   local limit=$2 v pre_p="" pre_o="" body="" bc="" tail_p="" r b t
   (( limit < 0 )) && limit=0
-  if [[ $T_VIEW == palette ]]; then
+  if [[ $E_ST == gone ]]; then
+    pre_p="- " pre_o="${C_B}${C_R}-${C_0} " body="deleted" bc=$C_D
+  elif [[ $E_ST == added ]]; then
+    # new: the colour it has, or in the palette where it lives
+    if [[ $T_VIEW == palette ]]; then body=${E_SEC[$1]} bc=$C_D
+    elif (( T_RAW )); then body=$EV_EFF
+    else describe_value "$EV_EFF"; body=$RET
+    fi
+    pre_p="+ " pre_o="${C_B}${C_G}+${C_0} "
+  elif [[ $E_ST == part ]]; then
+    pre_p="- " pre_o="${C_B}${C_R}-${C_0} " body="one spelling deleted" bc=$C_D
+  elif [[ $T_VIEW == palette ]]; then
     # the group says the colour; the row says where the entry lives
     body=${E_SEC[$1]} bc=$C_D
     (( EV_MOD )) && pre_p="* " pre_o="${C_B}${C_Y}*${C_0} "
@@ -3469,7 +3490,8 @@ row_text() {
   # cut to LIMIT from the end; every part keeps its colour, so a change
   # stays marked also in a narrow pane (with the picker open)
   if (( ${#pre_p} > limit )); then
-    RET="${C_B}${C_Y}${pre_p:0:limit}${C_0}" RET2=$limit
+    case $E_ST in gone|part) t=$C_R ;; added) t=$C_G ;; *) t=$C_Y ;; esac
+    RET="${C_B}$t${pre_p:0:limit}${C_0}" RET2=$limit
     return
   fi
   r=$(( limit - ${#pre_p} ))
@@ -3531,6 +3553,7 @@ render_list() {
       fi
       plain=${plain#  }
       [[ $T_VIEW == palette ]] && tail=${tail#  }
+      if (( ! G_N[ref] && G_GONE[ref] )); then plain="deleted" tail="${C_D}deleted${C_0}"; fi
       limit=$(( w - wt - 12 ))
       (( limit < 0 )) && limit=0
       if (( ${#plain} > limit )); then plain=${plain:0:limit} tail="${C_D}$plain${C_0}"; fi
@@ -3548,11 +3571,14 @@ render_list() {
       continue
     fi
     entry_values "$ref"
+    entry_state "$ref"
+    E_ST=$RET
     name=${E_NAME[ref]:0:wn} label=${E_LABEL[ref]:0:wl}
-    paint "$EV_EFF" "$name"
+    # an entry marked for deletion is dim, without its colour
+    if [[ $E_ST == gone ]]; then RET="${C_D}$name${C_0}"; else paint "$EV_EFF" "$name"; fi
     cell=$RET clen=${#name}
     # a name that can hardly be read in its colour is repeated in plain text
-    if hard_to_read "$EV_EFF" && (( clen + 2 < wn )); then
+    if [[ $E_ST != gone ]] && hard_to_read "$EV_EFF" && (( clen + 2 < wn )); then
       extra=${E_NAME[ref]:0:$(( wn - clen - 1 ))}
       cell+=" ${C_D}$extra${C_0}" clen=$(( clen + 1 + ${#extra} ))
     fi
@@ -3560,9 +3586,9 @@ render_list() {
     spaces "$(( wl - ${#label} ))"; pad2=$RET
     row_text "$ref" "$(( w - wn - wl - 9 ))"
     (( idx == T_CUR && ! LIST_DIM )) && label="${C_B}$label${C_0}"
-    (( LIST_DIM )) && label="${C_D}$label${C_0}"
+    if (( LIST_DIM )) || [[ $E_ST == gone ]]; then label="${C_D}$label${C_0}"; fi
     warn=" "
-    [[ -n ${E_WARN[ref]:-} ]] && warn="${C_Y}$GL_WARN${C_0}"
+    [[ -n ${E_WARN[ref]:-} && $E_ST != gone ]] && warn="${C_Y}$GL_WARN${C_0}"
     LP_TXT[r]="$gutter  $warn $cell$pad1  $label$pad2  $RET"
     # shellcheck disable=SC2034
     LP_LEN[r]=$(( wn + wl + 9 + RET2 ))
@@ -4212,8 +4238,10 @@ open_picker() {
   local -A tally=()
   PK_GRP=${2:--1}
   if (( PK_GRP >= 0 )); then
+    live_entries "${G_ENTRIES[PK_GRP]}"
+    if [[ -z $RET ]]; then T_MSG="Every entry here is marked for deletion; u brings them back."; return 1; fi
+    PK_ENTRIES=$RET
     summarise "$PK_GRP"
-    PK_ENTRIES=${G_ENTRIES[PK_GRP]}
     PK_START=${G_MAJ[PK_GRP]} PK_GDIFF=${G_DIFF[PK_GRP]}
     group_name "$PK_GRP"
     PK_GNAME=$RET
@@ -4229,6 +4257,8 @@ open_picker() {
       if (( c > a )); then a=$c PK_FILE=$RET; fi
     done
   else
+    entry_state "$ref"
+    if [[ $RET == gone ]]; then T_MSG="${E_LABEL[ref]} is marked for deletion; u brings it back."; return 1; fi
     PK_ENTRIES=" $ref"
     entry_values "$ref"
     PK_START=$EV_EFF
@@ -4338,50 +4368,604 @@ open_picker() {
   return 0
 }
 
-# revert ENTRIES -> RET: drop the staged changes of the entries, so that
-# they have their colours from the file again; RET counts the entries.
-revert() {
-  local e i n=0 hit
+# --- new entries, new sections and deletions ---------------------------------
+#
+# New lines go into the document at once (SRC), so that they are entries like
+# any other; ADDED remembers them. Lines of the file that are to go are only
+# marked in GONE and stay in the list until the save. ORIG is still the file
+# on disk, so the diff of the save shows both.
+
+# shift_lines FROM DELTA: what is kept by line number follows the lines from
+# FROM on, after DELTA lines were put in front of them (negative: taken out).
+shift_lines() {
+  local start=$1 delta=$2 i
+  local -a st=() ad=() go=()
+  for i in "${!ST[@]}"; do
+    if (( i >= start )); then st[i+delta]=${ST[i]}; else st[i]=${ST[i]}; fi
+  done
+  for i in "${!ADDED[@]}"; do
+    if (( i >= start )); then ad[i+delta]=1; else ad[i]=1; fi
+  done
+  for i in "${!GONE[@]}"; do
+    if (( i >= start )); then go[i+delta]=1; else go[i]=1; fi
+  done
+  ST=() ADDED=() GONE=()
+  for i in "${!st[@]}"; do ST[i]=${st[i]}; done
+  for i in "${!ad[@]}"; do ADDED[i]=1; done
+  for i in "${!go[@]}"; do GONE[i]=1; done
+  for i in "${!F_LINE[@]}"; do
+    if (( F_LINE[i] >= start )); then F_LINE[i]=$(( F_LINE[i] + delta )); fi
+  done
+}
+
+# doc_insert AFTER TEXT -> RET: the lines of TEXT go into the document after
+# line AFTER (0: at the top), marked as added; RET is the first of them.
+doc_insert() {
+  local after=$1 i
+  local -a lines=()
+  mapfile -t lines <<<"$2"
+  shift_lines "$(( after + 1 ))" "${#lines[@]}"
+  insert_after "$after" "$2"
+  doc_rebuild
+  for (( i = after + 1; i <= after + ${#lines[@]}; i++ )); do ADDED[i]=1; done
+  RET=$(( after + 1 ))
+}
+
+# doc_remove LINES: take lines out of the document.
+doc_remove() {
+  local i
+  local -a mark=() down=()
+  for i in $1; do mark[i]=1; done
+  for i in "${!mark[@]}"; do down=("$i" "${down[@]}"); done
+  for i in "${down[@]}"; do
+    delete_line "$i"
+    unset "ST[$i]" "ADDED[$i]" "GONE[$i]"
+    shift_lines "$(( i + 1 ))" -1
+  done
+  doc_rebuild
+}
+
+# key_lines KIND NORM -> RET: the lines that define the key, with the case
+# pairs joined in any spelling.
+key_lines() {
+  local q
+  local -a spell=()
+  RET=""
+  if [[ $1 == type ]]; then RET=${TYPE_LINES[$2]:-}; return; fi
+  if (( OPT_CASE )); then RET=${PAT_LINES[$2]:-}; return; fi
+  read -r -a spell <<<"${LPAT[${2,,}]:-}"
+  for q in "${spell[@]}"; do RET+=${PAT_LINES[$q]}; done
+}
+
+# entry_all ENTRY -> RET: every line of the entry, also those without a value.
+entry_all() {
+  local first=${E_LINES[$1]# } kind=pattern
+  first=${first%% *}
+  [[ ${L_KIND[first]} == type ]] && kind="type"
+  key_lines "$kind" "${L_NORM[first]}"
+}
+
+# entry_of LINES -> RET: the entry one of the lines belongs to.
+entry_of() {
+  local e i
+  for e in "${!E_LINES[@]}"; do
+    for i in $1; do
+      if [[ " ${E_LINES[e]} " == *" $i "* ]]; then RET=$e; return 0; fi
+    done
+  done
+  return 1
+}
+
+# entry_state ENTRY -> RET: added (new in this run), gone (marked for
+# deletion), part (some of its lines are, after c joined a case pair again)
+# or empty.
+entry_state() {
+  local i all=1 some=0
+  RET=""
+  for i in ${E_LINES[$1]}; do
+    if [[ -n ${ADDED[i]:-} ]]; then RET=added; return; fi
+    if [[ -n ${GONE[i]:-} ]]; then some=1; else all=0; fi
+  done
+  if (( all )); then RET=gone; elif (( some )); then RET=part; fi
+}
+
+# live_entries ENTRIES -> RET: those not marked for deletion.
+live_entries() {
+  local e out=""
+  for e in $1; do
+    entry_state "$e"
+    [[ $RET == gone ]] || out+=" $e"
+  done
+  RET=$out
+}
+
+# show_entry ENTRY: the cursor goes to the entry; its group unfolds, and a
+# search that hides it ends.
+show_entry() {
+  build_groups
+  if [[ -z ${E_GRP[$1]+x} ]]; then T_FILTER=""; build_groups; fi
+  set_fold "${E_GRP[$1]}" 0
+  CUR_ID="e:$1"
+  build_rows
+}
+
+# new_key KEY -> RET: the key as it goes into the file, RET2 its normalised
+# form (*.ext for a pattern, the code of a file type), NK_KIND pattern or
+# type. When the key is no use, T_MSG says why.
+NK_KIND=""
+new_key() {
+  local key=$1 upper=${1^^}
+  NK_KIND=""
+  if [[ $key == *[[:space:]#]* ]]; then
+    T_MSG="An entry has no spaces and no #: $key"
+    return 1
+  fi
+  case $key in
+    ""|.|\*|\*.)
+      T_MSG="A pattern needs more than \"$key\": .webp, *.log or *~ for example."
+      return 1 ;;
+    .*)  NK_KIND=pattern RET=$key RET2="*$key" ;;
+    \**) NK_KIND=pattern RET=$key RET2=$key ;;
+    *)
+      if [[ $upper =~ $RE_WORD && -n ${TYPE_CODE[$upper]:-} ]]; then
+        RET2=${TYPE_CODE[$upper]}
+        if [[ " $TYPES_RAW " == *" $RET2 "* ]]; then
+          T_MSG="$upper is not a colour, so edit does not list it."
+          return 1
+        fi
+        NK_KIND=type RET=${TYPE_NAME[$RET2]}
+      else
+        T_MSG="$key is not an entry: patterns start with . or * (.webp, *.log), file types are words such as DIR or FIFO."
+        return 1
+      fi ;;
+  esac
+}
+
+# known_key KEY LINES: the key is in the file already; the cursor goes there.
+known_key() {
+  local e
+  if entry_of "$2"; then
+    e=$RET
+    show_entry "$e"
+    T_MSG="${E_LABEL[e]} is in the file already; the cursor is on it"
+    entry_state "$e"
+    [[ $RET == gone ]] && T_MSG+=" (marked for deletion, u brings it back)"
+  else
+    T_MSG="$1 is in the file already."
+  fi
+}
+
+# cursor_title -> RET: the section the cursor is in: in the section view
+# its group, in the palette view the section of the entry; empty for none.
+cursor_title() {
+  RET=""
+  if [[ $T_VIEW == section ]]; then
+    if cursor_group; then RET=${G_TITLE[RET]}; else RET=""; fi
+  elif cur_entry; then
+    RET=${E_SEC[RET]}
+  fi
+}
+
+# new_place KIND NORM -> RET: the line a new entry goes after, RET2 the
+# title of its section; NP_GAP is 1 when an empty line has to follow it.
+# A pattern goes to the end of the section the cursor is in, or with the
+# cursor elsewhere to the section of its category. Fails with T_MSG.
+NP_GAP=0 NP_CAT=""
+new_place() {
+  local norm=$2 title i s pos=0 posu=0
+  NP_GAP=0 NP_CAT=""
+  if [[ $1 == type ]]; then
+    for s in "${!TYPE_LINES[@]}"; do
+      for i in ${TYPE_LINES[$s]}; do (( i > pos )) && pos=$i; done
+    done
+    RET2="file types"
+    if (( ! pos )); then
+      # no file types yet: in front of the first section of patterns
+      for (( i = 1; i <= N; i++ )); do
+        [[ ${L_KIND[i]} == pattern ]] && break
+      done
+      pos=$(( i - 1 ))
+      while (( pos > 0 )) && [[ ${L_KIND[pos]} == comment ]]; do pos=$(( pos - 1 )); done
+      NP_GAP=1
+    fi
+    RET=$pos
+    return 0
+  fi
+  cursor_title
+  title=$RET
+  [[ $title == "file types" ]] && title=""
+  if [[ -z $title ]]; then
+    entry_category "$norm" 0
+    if [[ -n $RET ]]; then
+      for s in "${!SEC_TITLE[@]}"; do
+        if (( s )) && [[ ${SEC_CAT[s]} == "$RET" ]]; then title=${SEC_TITLE[s]}; break; fi
+      done
+      # a category without a section of its own: add_entry starts one
+      [[ -n $title ]] || NP_CAT=$RET
+    fi
+  fi
+  if [[ -z $title ]]; then
+    [[ -n $NP_CAT ]] || T_MSG="Which section? Put the cursor in the one it belongs in, or start a new one with N."
+    return 1
+  fi
+  for (( i = 1; i <= N; i++ )); do
+    [[ ${L_KIND[i]} == pattern && ${SEC_TITLE[${L_SEC[i]}]} == "$title" ]] || continue
+    pos=$i
+    [[ -z ${L_SCOPE[i]} ]] && posu=$i
+  done
+  (( posu )) && pos=$posu
+  RET=$pos RET2=$title
+}
+
+# cat_value NORM [CATEGORY] -> RET: the colour most entries of the category
+# have, else the system database's, else 00.
+cat_value() {
+  local cat=${2:-}
+  if [[ -z $cat ]]; then entry_category "$1" 0; cat=$RET; fi
+  RET=""
+  [[ -n $cat ]] && RET=${CAT_MAJ[$cat]:-}
+  [[ -n $RET ]] || RET=${DB_VAL[$1]:-00}
+}
+
+# new_value KIND NORM TITLE -> RET: the colour a new entry starts with: in
+# the palette view that of the group under the cursor, otherwise the one
+# most entries of its section have (a file type: the system's).
+new_value() {
+  local g
+  RET=""
+  if [[ $T_VIEW == palette ]]; then
+    if cursor_group; then RET=${G_MAJ[RET]:-}; else RET=""; fi
+  elif [[ $1 == type ]]; then
+    RET=${DB_TYPE[$2]:-${LS_DEFAULT[$2]:-}}
+  else
+    for g in "${!G_TITLE[@]}"; do
+      [[ ${G_TITLE[g]} == "$3" ]] && RET=${G_MAJ[g]:-}
+    done
+  fi
+  if [[ -z $RET ]]; then
+    if [[ $1 == type ]]; then RET=00; else cat_value "$2"; fi
+  fi
+}
+
+# new_lines KEY VALUE NORM -> RET: the line of a new entry, and the line of
+# its upper-case twin when the file writes them as a rule.
+new_lines() {
+  RET="$1$ST_SEP$2"
+  if [[ $NK_KIND == pattern && $3 == \*.* && $1 != "${1^^}" ]] && (( TWIN_CONVENTION && ! OPT_CASE )); then
+    RET+="$NL${1^^}$ST_SEP$2"
+  fi
+}
+
+# add_entry KEY -> RET: the new entry, with the cursor on it. A pattern of a
+# category that has no section yet starts one named after the category.
+# Fails with T_MSG.
+add_entry() {
+  local key norm at title text
+  new_key "$1" || return 1
+  key=$RET norm=$RET2
+  key_lines "$NK_KIND" "$norm"
+  if [[ -n $RET ]]; then known_key "$key" "$RET"; return 1; fi
+  if ! new_place "$NK_KIND" "$norm"; then
+    [[ -n $NP_CAT ]] || return 1
+    add_section "$NP_CAT" "$key"
+    return
+  fi
+  at=$RET title=$RET2
+  new_value "$NK_KIND" "$norm" "$title"
+  new_lines "$key" "$RET" "$norm"
+  text=$RET
+  (( NP_GAP )) && text+=$NL
+  doc_insert "$at" "$text"
+  at=$RET
+  build_entries
+  entry_of "$at"
+  at=$RET
+  show_entry "$at"
+  RET=$at
+}
+
+# title_ok TITLE: true when TITLE works as the heading of a new section.
+title_ok() {
+  local s line="$ST_HPRE$1$ST_HPOST" t
+  # read back the way parse reads a heading
+  t=${line#"${line%%[!#+[:space:]]*}"}
+  t=${t%"${t##*[![:space:]:#]}"}
+  if [[ $t != "$1" || ! $t =~ $RE_ALNUM || $t =~ $RE_COMMENTED ]]; then
+    T_MSG="\"$1\" cannot be a section title: it needs a letter or digit, and must not look like an entry."
+    return 1
+  fi
+  for s in "${!SEC_TITLE[@]}"; do
+    if (( s )) && [[ ${SEC_TITLE[s],,} == "${1,,}" ]]; then
+      T_MSG="There is a section ${SEC_TITLE[s]} already: n adds an entry to it."
+      if [[ $T_VIEW == section ]]; then CUR_ID="h:${SEC_TITLE[s]}"; place_cursor; fi
+      return 1
+    fi
+  done
+}
+
+# add_section TITLE KEY -> RET: a new section with KEY as its first entry,
+# after the section the cursor is in, or else after the last entry. Fails
+# with T_MSG.
+add_section() {
+  local title=$1 key norm at=0 i text
+  title_ok "$title" || return 1
+  new_key "$2" || return 1
+  key=$RET norm=$RET2
+  if [[ $NK_KIND == type ]]; then
+    T_MSG="File types have a section of their own: n adds $key there."
+    return 1
+  fi
+  key_lines pattern "$norm"
+  if [[ -n $RET ]]; then known_key "$key" "$RET"; return 1; fi
+  if [[ $T_VIEW == section ]] && cursor_title && [[ -n $RET ]]; then
+    for (( i = 1; i <= N; i++ )); do
+      case ${L_KIND[i]} in
+        type)    [[ $RET == "file types" ]] && at=$i ;;
+        pattern) [[ ${SEC_TITLE[${L_SEC[i]}]} == "$RET" ]] && at=$i ;;
+      esac
+    done
+  fi
+  if (( ! at )) || [[ -n ${L_SCOPE[at]} ]]; then
+    # after the last entry that no TERM line limits
+    at=$N
+    for (( i = 1; i <= N; i++ )); do
+      case ${L_KIND[i]} in pattern|type) [[ -z ${L_SCOPE[i]} ]] && at=$i ;; esac
+    done
+  fi
+  if [[ $T_VIEW == palette ]] && cursor_group; then
+    RET=${G_MAJ[RET]:-}
+  else
+    section_category "$title"
+    cat_value "$norm" "$RET"
+  fi
+  [[ -n $RET ]] || RET=00
+  new_lines "$key" "$RET" "$norm"
+  text="$NL$ST_HPRE$title$ST_HPOST$NL$RET"
+  (( at < N )) && [[ ${L_KIND[at+1]} != blank ]] && text+=$NL
+  doc_insert "$at" "$text"
+  at=$(( RET + 2 ))
+  build_entries
+  entry_of "$at"
+  at=$RET
+  show_entry "$at"
+  RET=$at
+}
+
+# drop_added LINES: take added lines out again. A section that was added in
+# this run goes with its last entry, with the empty lines around it.
+drop_added() {
+  local i s h j k m
+  local -A drop=() left=()
+  for i in $1; do drop[$i]=1; done
+  for (( i = 1; i <= N; i++ )); do
+    [[ ${L_KIND[i]} == pattern && -z ${drop[$i]:-} ]] && left[${L_SEC[i]}]=1
+  done
+  for i in $1; do
+    [[ ${L_KIND[i]} == pattern ]] || continue
+    s=${L_SEC[i]} h=${SEC_LINE[${L_SEC[i]}]}
+    (( s )) || continue
+    [[ -n ${ADDED[h]:-} && -z ${left[$s]:-} && -z ${drop[$h]:-} ]] || continue
+    drop[$h]=1
+    for (( j = h - 1; j > 0; j-- )); do
+      [[ -n ${ADDED[j]:-} && ${L_KIND[j]} == blank ]] || break
+      drop[$j]=1
+    done
+    for (( k = h + 1; k <= N; k++ )); do
+      [[ -n ${ADDED[k]:-} && ${L_KIND[k]} == pattern && ${L_SEC[k]} == "$s" ]] || break
+      drop[$k]=1
+    done
+    # the empty lines after it only when they came with it: neither the
+    # line in front of the section nor the one after them is new
+    for (( m = k; m <= N; m++ )); do
+      [[ -n ${ADDED[m]:-} && ${L_KIND[m]} == blank ]] || break
+    done
+    if (( m > k )) && [[ -z ${ADDED[j]:-} ]] && { (( m > N )) || [[ -z ${ADDED[m]:-} ]]; }; then
+      for (( ; k < m; k++ )); do drop[$k]=1; done
+    fi
+  done
+  doc_remove "${!drop[*]}"
+}
+
+# gone_headings: a section whose entries are all marked for deletion loses
+# its heading too, with the empty line in front of it; once it has an entry
+# again, it keeps them.
+gone_headings() {
+  local s i h
+  local -A live=() any=()
+  for (( i = 1; i <= N; i++ )); do
+    [[ ${L_KIND[i]} == pattern ]] || continue
+    any[${L_SEC[i]}]=1
+    [[ -n ${GONE[i]:-} ]] || live[${L_SEC[i]}]=1
+  done
+  for s in "${!SEC_LINE[@]}"; do
+    (( s )) || continue
+    [[ -n ${any[$s]:-} ]] || continue
+    h=${SEC_LINE[s]}
+    [[ -n ${ADDED[h]:-} ]] && continue
+    if [[ -n ${live[$s]:-} ]]; then
+      unset "GONE[$h]"
+      (( h > 1 )) && unset "GONE[$(( h - 1 ))]"
+    else
+      GONE[h]=1
+      if (( h > 1 )) && [[ ${L_KIND[h-1]} == blank && -z ${ADDED[h-1]:-} ]]; then GONE[h-1]=1; fi
+    fi
+  done
+}
+
+# delete_entries ENTRIES -> RET: entries of the file are marked for
+# deletion, entries added in this run go at once (DROPPED is then 1). RET
+# counts the entries.
+DROPPED=0
+delete_entries() {
+  local e i n=0 out=""
+  DROPPED=0
+  for e in $1; do
+    entry_state "$e"
+    [[ $RET == gone ]] && continue
+    n=$(( n + 1 ))
+    entry_all "$e"
+    for i in $RET; do
+      if [[ -n ${ADDED[i]:-} ]]; then out+=" $i"; else GONE[i]=1; unset "ST[$i]"; fi
+    done
+  done
+  if [[ -n $out ]]; then drop_added "$out"; DROPPED=1; fi
+  gone_headings
+  (( DROPPED )) && build_entries
+  RET=$n
+}
+
+# undo_entries ENTRIES -> RET: back to the file: staged colours and marks
+# for deletion go, added entries are taken out again (DROPPED is then 1).
+# RET counts the entries that changed.
+undo_entries() {
+  local e i n=0 hit out=""
+  DROPPED=0
   for e in $1; do
     hit=0
-    for i in ${E_LINES[e]}; do
+    entry_all "$e"
+    for i in $RET; do
+      if [[ -n ${ADDED[i]:-} ]]; then out+=" $i"; hit=1; continue; fi
       if [[ -n ${ST[i]+x} ]]; then unset "ST[$i]"; hit=1; fi
+      if [[ -n ${GONE[i]:-} ]]; then unset "GONE[$i]"; hit=1; fi
     done
     n=$(( n + hit ))
+  done
+  if [[ -n $out ]]; then drop_added "$out"; DROPPED=1; fi
+  gone_headings
+  (( DROPPED )) && build_entries
+  RET=$n
+}
+
+# unsaved -> RET: how many entry lines the save would change: new colours,
+# new lines and deletions.
+unsaved() {
+  local i n=0
+  for i in "${!ST[@]}"; do [[ -n ${ADDED[i]:-} ]] || n=$(( n + 1 )); done
+  for i in "${!ADDED[@]}" "${!GONE[@]}"; do
+    case ${L_KIND[i]} in pattern|type) n=$(( n + 1 )) ;; esac
   done
   RET=$n
 }
 
-# undo_here: u. Back to the colours in the file for the entry under the
-# cursor, or on a heading for every entry of the group.
-undo_here() {
-  local what
-  if cur_entry; then
-    what=${E_LABEL[RET]}
-    revert " $RET"
-  elif [[ ${ROW_KIND[T_CUR]:-} == h ]]; then
-    group_name "${ROW_REF[T_CUR]}"
-    what=$RET
-    revert "${G_ENTRIES[${ROW_REF[T_CUR]}]}"
+# prompt_line PROMPT -> RET: a line typed on the message row, without the
+# spaces around it. Fails on Esc and on an empty line.
+prompt_line() {
+  T_CTX=prompt
+  draw_screen
+  T_CTX=list
+  line_input "$1" "" || return 1
+  RET=${RET#"${RET%%[![:space:]]*}"}
+  RET=${RET%"${RET##*[![:space:]]}"}
+  [[ -n $RET ]]
+}
+
+# edit_new ENTRY: the picker opens on an entry that was just added; Esc
+# keeps the colour it was given.
+edit_new() {
+  local e=$1 v
+  draw_screen
+  if open_picker "$e"; then
+    T_MSG="${E_LABEL[e]} added to ${E_SEC[e]}, ${T_MSG#"${E_LABEL[e]} "}"
   else
-    return
-  fi
-  if (( RET )); then
-    T_MSG="$what: back to the colours in the file ($RET entries)"
-    build_rows
-  else
-    T_MSG="$what has no changes to undo."
+    file_value "$e"
+    v=$RET
+    describe_value "$v"
+    T_MSG="${E_LABEL[e]} added to ${E_SEC[e]} as $RET ($v); u takes it out again"
   fi
 }
 
-# undo_all: U. Every staged change goes, after a question.
+# key_new: n. Asks for a pattern or file type and adds it.
+key_new() {
+  prompt_line " new entry (.webp, *.log, FIFO): " || return
+  add_entry "$RET" || return
+  edit_new "$RET"
+}
+
+# key_new_section: N. Asks for the title and the first entry.
+key_new_section() {
+  local title
+  prompt_line " title of the new section: " || return
+  title=$RET
+  title_ok "$title" || return
+  prompt_line " first entry of $title (.webp, *.log): " || return
+  add_section "$title" "$RET" || return
+  edit_new "$RET"
+}
+
+# key_delete: D. The entry under the cursor is marked for deletion, or on a
+# heading, after a question, every entry of the group.
+key_delete() {
+  local list what g title q
+  local -a n=()
+  if cur_entry; then
+    list=" $RET" what=${E_LABEL[RET]} title=${G_TITLE[${E_GRP[RET]}]}
+    entry_state "$RET"
+    if [[ $RET == gone ]]; then T_MSG="$what is marked for deletion already; u brings it back."; return; fi
+  elif [[ ${ROW_KIND[T_CUR]:-} == h ]]; then
+    g=${ROW_REF[T_CUR]} title=${G_TITLE[${ROW_REF[T_CUR]}]}
+    group_name "$g"
+    what=$RET
+    [[ $T_VIEW == palette ]] && what="the $RET entries"
+    live_entries "${G_ENTRIES[g]}"
+    list=$RET
+    if [[ -z $list ]]; then T_MSG="Every entry of $what is marked for deletion already; u brings them back."; return; fi
+    read -r -a n <<<"$list"
+    if [[ -n $T_FILTER ]]; then q="the ${#n[@]} matching entries"; else q="all ${#n[@]} entries"; fi
+    if ! ask_yes "Delete $q of $what?"; then T_MSG="Nothing changed."; return; fi
+  else
+    return
+  fi
+  delete_entries "$list"
+  if [[ -n $g ]]; then
+    T_MSG="$what: $RET entries marked for deletion; u on the heading brings them back"
+  elif (( DROPPED )); then
+    T_MSG="$what taken out again"
+  else
+    T_MSG="$what marked for deletion; u brings it back, s saves"
+  fi
+  (( DROPPED )) && CUR_ID="h:$title"
+  build_rows
+}
+
+# undo_here: u. Back to the file for the entry under the cursor, or on a
+# heading for every entry of the group: colours, deletions and new entries.
+undo_here() {
+  local what list title one=0
+  if cur_entry; then
+    what=${E_LABEL[RET]} list=" $RET" title=${G_TITLE[${E_GRP[RET]}]} one=1
+  elif [[ ${ROW_KIND[T_CUR]:-} == h ]]; then
+    group_name "${ROW_REF[T_CUR]}"
+    what=$RET list=${G_ENTRIES[${ROW_REF[T_CUR]}]} title=${G_TITLE[${ROW_REF[T_CUR]}]}
+  else
+    return
+  fi
+  undo_entries "$list"
+  if (( ! RET )); then T_MSG="$what has no changes to undo."; return; fi
+  if (( one && DROPPED )); then
+    T_MSG="$what taken out again"
+  else
+    T_MSG="$what: back to the file ($RET entries)"
+  fi
+  (( DROPPED )) && CUR_ID="h:$title"
+  build_rows
+}
+
+# undo_all: U. Every change goes, after a question.
 undo_all() {
   local n
   revert_count
   n=$RET
   if (( ! n )); then T_MSG="Nothing to undo."; return; fi
   if ask_yes "Undo all changes ($n entries)?"; then
-    ST=()
+    if (( ${#ADDED[@]} || ${#GONE[@]} )); then
+      (( ${#ADDED[@]} )) && CUR_ID=""
+      SRC=("${ORIG[@]}")
+      N=$(( ${#SRC[@]} - 1 ))
+      parse
+      F_LINE=("${F_LINE0[@]}")
+      build_entries
+    fi
+    ST=() ADDED=() GONE=()
     build_rows
     T_MSG="All changes undone."
   fi
@@ -4436,6 +5020,9 @@ apply_here() {
   else
     return
   fi
+  live_entries "$list"
+  list=$RET
+  if [[ -z $list ]]; then T_MSG="$what is marked for deletion; u brings it back."; return; fi
   for e in $list; do
     entry_target "$kind" "$e"
     count_changes " $e" "$RET"
@@ -4487,12 +5074,13 @@ apply_here() {
   fi
 }
 
-# revert_count -> RET: how many entries have staged changes.
+# revert_count -> RET: how many entries have changes: a staged colour, a
+# mark for deletion, or that are new.
 revert_count() {
   local e i n=0
   for e in "${!E_LINES[@]}"; do
     for i in ${E_LINES[e]}; do
-      if [[ -n ${ST[i]+x} ]]; then n=$(( n + 1 )); break; fi
+      if [[ -n ${ST[i]+x} || -n ${ADDED[i]:-} || -n ${GONE[i]:-} ]]; then n=$(( n + 1 )); break; fi
     done
   done
   RET=$n
@@ -4504,8 +5092,15 @@ revert_count() {
 EDIT_DONE=0
 save_staged() {
   local i
-  if (( ! ${#ST[@]} )); then T_MSG="Nothing to save."; return; fi
+  local -a work=()
+  unsaved
+  if (( ! RET )); then T_MSG="Nothing to save."; return; fi
+  work=("${SRC[@]}")
   for i in "${!ST[@]}"; do set_value "$i" "${ST[i]}"; done
+  if (( ${#GONE[@]} )); then
+    for i in "${!GONE[@]}"; do delete_line "$i"; done
+    doc_rebuild
+  fi
   tui_suspend
   trap 'exit 130' INT
   if review_and_save; then
@@ -4513,8 +5108,8 @@ save_staged() {
     trap 'INTR=1' INT
     return
   fi
-  # not written: put the document back, the changes stay staged
-  SRC=("${ORIG[@]}")
+  # not written: back to the document of the editor, the changes stay staged
+  SRC=("${work[@]}")
   N=$(( ${#SRC[@]} - 1 ))
   parse
   T_MSG="Not saved; your changes are still staged."
@@ -4555,7 +5150,10 @@ help_lines() {
   hk "/" "search (pattern, sample name or section); Esc clears"
   hk "x" "show the codes instead of the colours in words"
   hk "c" "join or separate case pairs such as .deb / .DEB"
-  hk "u" "undo the changes of the entry under the cursor (on a heading: of all its entries)"
+  hk "n" "new entry, such as .webp or FIFO, at the end of the section under the cursor (in the palette view: in the colour under the cursor); the picker opens on it"
+  hk "N" "new section after the one under the cursor: asks for its title and its first entry"
+  hk "D" "delete the entry (on a heading: every entry of it, asks first); it stays in the list, marked, until you save"
+  hk "u" "undo the changes of the entry under the cursor: its colour, its deletion, or the entry itself when it is new (on a heading: of all its entries)"
   hk "U" "undo all changes (asks first)"
   hk "y" "copy the colour of the entry under the cursor"
   hk "p" "paste the copied colour on the entry (on a heading: on every entry of it, asks first); the copy stays for more pastes"
@@ -4654,8 +5252,9 @@ help_edit() {
   cat <<EOF
 Usage: $PROG edit [OPTIONS] [FILE]
 
-Change the colours of existing entries in a full-screen editor. Every entry
-is shown with a sample name in its current colour. Colours are picked from a
+Change the colours of the entries, add new ones and delete them in a
+full-screen editor. Every entry is shown with a sample name in its current
+colour. Colours are picked from a
 palette and bold, dim, underline, reverse and blink are switched on and off;
 nobody has to type a code. From 100 columns the picker opens beside the
 list, narrower it takes the whole screen.
@@ -4672,11 +5271,12 @@ section), Space to fold a section, z / Z to fold or unfold all, / to search,
 v for the palette view (entries grouped by colour), x to switch between
 colours in words and codes, c for case pairs, u to undo the entry under the
 cursor, U to undo everything, y and p to copy and paste a colour, d to clear
-an entry, s to save, q to quit, ? for the full list. In the picker the
-arrows move the cursor and Space chooses the colour under it.
+an entry, n to add an entry, N to add a section, D to delete an entry, s to
+save, q to quit, ? for the full list. In the picker the arrows move the
+cursor and Space chooses the colour under it.
 
-edit only changes entries that exist. Adding entries and reorganising the
-file is the job of fix.
+New entries go to the end of the section under the cursor. Sorting the file
+and adding everything that is missing is the job of fix.
 EOF
 }
 
@@ -4688,6 +5288,7 @@ cmd_edit() {
   load_config
   prepare_checks
   run_checks
+  F_LINE0=("${F_LINE[@]}")
   style_detect
   OPT_COLOUR=always
   setup_colour
@@ -4776,6 +5377,9 @@ cmd_edit() {
         CUR_ID=""
         build_rows ;;
       x) T_RAW=$(( ! T_RAW )) ;;
+      n) key_new ;;
+      N) key_new_section ;;
+      D) key_delete ;;
       u) undo_here ;;
       U) undo_all ;;
       y) copy_entry ;;
@@ -4787,8 +5391,9 @@ cmd_edit() {
         # q and Ctrl-C ask when there are unsaved changes; Ctrl-C once
         # more at the question quits
         INTR=0
-        if (( ${#ST[@]} )) && [[ $KEY != eof ]]; then
-          printf '%s' "${ESC}[${MSG_ROW};1H${ESC}[K ${C_Y}${#ST[@]} unsaved changes. Quit without saving? [y/N]${C_0} "
+        unsaved
+        if (( RET )) && [[ $KEY != eof ]]; then
+          printf '%s' "${ESC}[${MSG_ROW};1H${ESC}[K ${C_Y}$RET unsaved changes. Quit without saving? [y/N]${C_0} "
           unset "FRAME[$MSG_ROW]"
           while ! read_key 0.5; do
             if (( INTR )); then KEY=y; break; fi

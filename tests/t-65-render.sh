@@ -36,7 +36,7 @@ render_state() {
   setup_glyphs
   read_file "$FIX/pairs.dircolors"
   FILE=pairs.dircolors
-  ST=() V_DESC=() V_HARD=()
+  ST=() ADDED=() GONE=() V_DESC=() V_HARD=()
   T_FILTER="" T_MSG="" T_CUR=0 T_TOP=0 T_RAW=0 T_FOCUS=list T_CTX=list
   T_VIEW=section T_FOLD_DEFAULT=0 FOLD=() FOLD_F=() CUR_ID=""
   F_LINE=() F_WHAT=()
@@ -149,17 +149,17 @@ plain render_header 97
 is "$HEAD_H" 2 "...and takes two rows where 100 unsaved changes would not fit on one"
 ST=()
 plain render_footer 60 list 1/5
-is "$RET" " ? help   arrows move   / search                        1/5 " "on one row, the groups that do not fit are left out; the position is on the right"
+is "$RET" " ? help   arrows move   / search   -   s save   q quit  1/5 " "on one row, the groups that do not fit are left out; the position is on the right"
 plain render_footer 120 list 1/5 4
-is "$RET" "$(printf '%-116s1/5 \n%-120s\n%-120s' " ? help   arrows move   / search" \
-  " Enter edit   s save   q quit   -   y copy   p paste   d clear   u undo   U undo all" \
+is "$RET" "$(printf '%-116s1/5 \n%-120s\n%-120s' " ? help   arrows move   / search   -   s save   q quit" \
+  " Enter edit   n new   N new section   D delete   -   y copy   p paste   d clear   u undo   U undo all" \
   " v view   x codes   Space fold   z fold all   Z unfold all   c case pairs")" "the list has three rows of hints, even when wide; groups on one row are split by a dot"
 plain render_footer 120 picker "" 4
 is "$RET" "$(printf '%-120s' " ? help   arrows move   Tab next field   -   Space choose   Enter accept   r reset   e type code   Esc/q cancel")" "the picker has two groups on one row"
 plain render_footer 80 list "" 4
-is "${FOOT_TXT[1]}|${#FOOT_TXT[@]}" "$(printf '%-80s' " Enter edit   s save   q quit")|4" "a group that does not fit moves to the next row"
+is "${FOOT_TXT[1]}|${#FOOT_TXT[@]}" "$(printf '%-80s' " Enter edit   n new   N new section   D delete")|4" "a group that does not fit moves to the next row"
 plain render_footer 40 list "" 9
-is "${FOOT_TXT[2]}|${FOOT_TXT[3]}" " y copy   p paste   d clear   u undo    | U undo all                             " "a group wider than a row is split between its keys"
+is "${FOOT_TXT[2]}|${FOOT_TXT[3]}" " Enter edit   n new   N new section     | D delete                               " "a group wider than a row is split between its keys"
 plain render_footer 60 list 1/5 2
 is "${#FOOT_TXT[@]}" 2 "...and the hints never take more rows than allowed"
 old_total=$T_TOTAL
@@ -190,8 +190,8 @@ is "$RET" "$(printf '%-60s\n%-60s' " ls-colours-config.sh   -   16 colours - 0 u
      example.gz        .gz / .GZ       red | green  differs
 ------------------------------------------------------------
 
- ? help   arrows move   / search                        1/5 
- Enter edit   s save   q quit                               
+ ? help   arrows move   / search   -   s save   q quit  1/5 
+ Enter edit   n new   N new section   D delete              
  y copy   p paste   d clear   u undo   U undo all           
  v view   x codes   Space fold   z fold all   Z unfold all  " "header, rule, list, rule, message row, key hints; the hints take at most half the rows"
 T_FILTER=png CUR_ID=""; build_rows
@@ -417,7 +417,7 @@ build_rows
 stage_value " 0 1 2" 33; build_rows
 CUR_ID="h:archives"; place_cursor
 undo_here
-is "${#ST[@]}|$T_MSG" "0|archives: back to the colours in the file (3 entries)" "u on a heading undoes the whole section"
+is "${#ST[@]}|$T_MSG" "0|archives: back to the file (3 entries)" "u on a heading undoes the whole section"
 stage_value " 0 1 2" 33; stage_value " 3" 32; build_rows
 CUR_ID="e:1"; place_cursor
 undo_here
